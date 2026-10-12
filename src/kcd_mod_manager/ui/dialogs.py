@@ -37,23 +37,48 @@ from kcd_mod_manager.i18n import tr
 from kcd_mod_manager.resources import resource_path
 from kcd_mod_manager.ui import icons
 from kcd_mod_manager.ui.theme import current_palette
-from kcd_mod_manager.ui.widgets import Card, IconButton, label, secondary_button
+from kcd_mod_manager.ui.widgets import Card, IconButton, footer_bar, label, secondary_button
 
-DIALOG_MARGIN = 20
+DIALOG_MARGIN_X, DIALOG_MARGIN_Y = 28, 22
 
 # --------------------------------------------------------------------------- building blocks
 
 
-def _dialog_layout(dialog: QDialog, spacing: int = 12) -> QVBoxLayout:
-    layout = QVBoxLayout(dialog)
-    layout.setContentsMargins(DIALOG_MARGIN, DIALOG_MARGIN, DIALOG_MARGIN, DIALOG_MARGIN)
-    layout.setSpacing(spacing)
-    return layout
+def _dialog_layout(
+    dialog: QDialog,
+    title: str | None = None,
+    *,
+    subtitle: str | None = None,
+    kind: str | None = None,
+    spacing: int = 10,
+    title_style: str = "pageTitle",
+) -> tuple[QVBoxLayout, QHBoxLayout]:
+    """Settings-style frame: title (+ subtitle) and body on top, footer bar below; returns both layouts."""
+    outer = QVBoxLayout(dialog)
+    outer.setContentsMargins(0, 0, 0, 0)
+    outer.setSpacing(0)
+    body = QVBoxLayout()
+    body.setContentsMargins(DIALOG_MARGIN_X, DIALOG_MARGIN_Y, DIALOG_MARGIN_X, DIALOG_MARGIN_Y)
+    body.setSpacing(spacing)
+    if title is not None:
+        header = QHBoxLayout()
+        header.setSpacing(12)
+        if kind is not None:
+            header.addWidget(_kind_icon(kind, 28 if title_style == "pageTitle" else 24))
+        header.addWidget(label(title, title_style, dialog, wrap=True), 1)
+        body.addLayout(header)
+        if subtitle:
+            body.addWidget(label(subtitle, "secondary", dialog, wrap=True))
+        body.addSpacing(6)
+    outer.addLayout(body, 1)
+    bar, footer = footer_bar(dialog)
+    outer.addWidget(bar)
+    return body, footer
 
 
 def _dialog_button(text: str, primary: bool = False) -> QPushButton:
     button = QPushButton(text)
-    button.setMinimumSize(80, 30)
+    button.setMinimumSize(96, 32)
     button.setCursor(Qt.CursorShape.PointingHandCursor)
     if primary:
         button.setObjectName("dialogPrimary")
@@ -61,23 +86,28 @@ def _dialog_button(text: str, primary: bool = False) -> QPushButton:
     return button
 
 
-def _button_row(*buttons: QPushButton, leading: QWidget | None = None) -> QHBoxLayout:
-    row = QHBoxLayout()
-    row.setSpacing(10)
+def _add_buttons(footer: QHBoxLayout, *buttons: QPushButton, leading: QWidget | None = None) -> None:
     if leading is not None:
-        row.addWidget(leading)
-    row.addStretch(1)
+        footer.addWidget(leading)
+    footer.addStretch(1)
     for button in buttons:
-        row.addWidget(button)
-    return row
+        footer.addWidget(button)
 
 
-def _ok_cancel(dialog: QDialog, ok_text: str | None = None) -> QHBoxLayout:
+def _ok_cancel(dialog: QDialog, footer: QHBoxLayout, ok_text: str | None = None) -> None:
     ok = _dialog_button(ok_text or tr("OKButton"), primary=True)
     ok.clicked.connect(dialog.accept)
     cancel = _dialog_button(tr("CancelButton"))
     cancel.clicked.connect(dialog.reject)
-    return _button_row(ok, cancel)
+    _add_buttons(footer, ok, cancel)
+
+
+def _body_text(text: str, parent: QWidget | None = None) -> QLabel:
+    widget = label(text, "", parent, wrap=True)
+    font = widget.font()
+    font.setPixelSize(14)
+    widget.setFont(font)
+    return widget
 
 
 KIND_ICONS = {
@@ -115,25 +145,18 @@ class MessageDialog(QDialog):
         self.setMinimumWidth(440)
         self.setMaximumWidth(640)
         self.clicked_index = -1
-        layout = _dialog_layout(self, 20)
-        body = QHBoxLayout()
-        body.setSpacing(16)
-        body.addWidget(_kind_icon(kind), 0, Qt.AlignmentFlag.AlignTop)
-        text = QLabel(message)
-        text.setWordWrap(True)
+        layout, footer = _dialog_layout(self, title, kind=kind, title_style="sectionTitle")
+        text = _body_text(message, self)
         text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        font = text.font()
-        font.setPixelSize(14)
-        text.setFont(font)
         text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        body.addWidget(text, 1)
-        layout.addLayout(body)
+        text.setContentsMargins(36, 0, 0, 6)
+        layout.addWidget(text)
         widgets = []
         for index, key in enumerate(buttons):
             button = _dialog_button(tr(key), primary=index == 0)
             button.clicked.connect(lambda _=False, i=index: self._clicked(i))
             widgets.append(button)
-        layout.addLayout(_button_row(*widgets))
+        _add_buttons(footer, *widgets)
 
     def _clicked(self, index: int) -> None:
         self.clicked_index = index
@@ -166,17 +189,12 @@ class PromptDialog(QDialog):
     def __init__(self, parent: QWidget | None, title: str, prompt: str, editor: QWidget) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setMinimumWidth(420)
-        layout = _dialog_layout(self, 10)
-        caption = label(prompt, wrap=True)
-        font = caption.font()
-        font.setPixelSize(14)
-        caption.setFont(font)
-        layout.addWidget(caption)
-        editor.setMinimumHeight(32)
+        self.setMinimumWidth(440)
+        layout, footer = _dialog_layout(self, title, title_style="sectionTitle")
+        layout.addWidget(_body_text(prompt, self))
+        editor.setMinimumHeight(34)
         layout.addWidget(editor)
-        layout.addSpacing(8)
-        layout.addLayout(_ok_cancel(self))
+        _ok_cancel(self, footer)
         editor.setFocus()
 
 
@@ -203,12 +221,12 @@ class MultilineDialog(QDialog):
     def __init__(self, parent: QWidget | None, title: str, prompt: str, text: str = "") -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.resize(480, 300)
-        layout = _dialog_layout(self, 10)
-        layout.addWidget(label(prompt, wrap=True))
+        self.resize(520, 340)
+        layout, footer = _dialog_layout(self, title, title_style="sectionTitle")
+        layout.addWidget(_body_text(prompt, self))
         self.editor = QPlainTextEdit(text)
         layout.addWidget(self.editor, 1)
-        layout.addLayout(_ok_cancel(self))
+        _ok_cancel(self, footer)
 
     def value(self) -> str:
         return self.editor.toPlainText()
@@ -223,28 +241,27 @@ class DeleteConfirmDialog(QDialog):
     def __init__(self, parent: QWidget | None, mod_name: str) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("DeleteModTitle"))
-        self.setMinimumWidth(440)
-        layout = _dialog_layout(self, 16)
-        body = QHBoxLayout()
-        body.setSpacing(16)
-        body.addWidget(_kind_icon("warning"), 0, Qt.AlignmentFlag.AlignTop)
-        text = QVBoxLayout()
-        text.setSpacing(6)
-        message = label(tr("DeleteModMessage"), wrap=True)
-        font = message.font()
-        font.setPixelSize(14)
-        message.setFont(font)
-        text.addWidget(message)
-        name = label(mod_name, "fieldLabel", wrap=True)
-        text.addWidget(name)
-        body.addLayout(text, 1)
-        layout.addLayout(body)
+        self.setMinimumWidth(460)
+        layout, footer = _dialog_layout(
+            self, tr("DeleteModTitle"), kind="warning", title_style="sectionTitle"
+        )
+        layout.addWidget(_body_text(tr("DeleteModMessage"), self))
+        card = Card(self)
+        row = QHBoxLayout(card)
+        row.setContentsMargins(14, 10, 14, 10)
+        row.setSpacing(10)
+        icon = QLabel(card)
+        icon.setFixedSize(20, 20)
+        icon.setPixmap(icons.pixmap("archive", current_palette().text_secondary, 20))
+        row.addWidget(icon)
+        row.addWidget(label(mod_name, "cardTitle", card, wrap=True), 1)
+        layout.addWidget(card)
         self.dont_ask = QCheckBox(tr("DontAskAgain"))
         yes = _dialog_button(tr("YesButton"), primary=True)
         yes.clicked.connect(self.accept)
         no = _dialog_button(tr("NoButton"))
         no.clicked.connect(self.reject)
-        layout.addLayout(_button_row(yes, no, leading=self.dont_ask))
+        _add_buttons(footer, yes, no, leading=self.dont_ask)
 
 
 def confirm_delete(parent: QWidget | None, mod_name: str) -> tuple[bool, bool]:
@@ -358,23 +375,13 @@ class GameSelectionDialog(QDialog):
         self.selected: GameType | None = None
         self._installs = installs
         self._set_executable = set_executable
-        layout = _dialog_layout(self, 16)
-        header = label(tr("SelectGameMessage"), "dialogHeader", wrap=True)
-        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(header)
+        layout, footer = _dialog_layout(self, tr("SelectGameTitle"), subtitle=tr("SelectGameMessage"))
         self._cards_layout = QHBoxLayout()
         self._cards_layout.setSpacing(20)
         layout.addLayout(self._cards_layout, 1)
-        hint = label(tr("ClickCardToSelect"), "hint")
         cancel = _dialog_button(tr("CancelButton"))
-        cancel.setMinimumSize(100, 35)
         cancel.clicked.connect(self.reject)
-        footer = QHBoxLayout()
-        footer.addStretch(1)
-        footer.addWidget(hint)
-        footer.addSpacing(15)
-        footer.addWidget(cancel)
-        layout.addLayout(footer)
+        _add_buttons(footer, cancel, leading=label(tr("ClickCardToSelect"), "hint", self))
         self._build_cards()
 
     def _build_cards(self) -> None:
@@ -420,32 +427,34 @@ class AssignCategoryDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("AssignCategoryTitle"))
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(460)
         self._create = create
-        layout = _dialog_layout(self, 8)
-        layout.addWidget(label(tr("AssignCategoryLabel"), "fieldLabel"))
+        layout, footer = _dialog_layout(
+            self, tr("AssignCategoryTitle"), title_style="sectionTitle", spacing=6
+        )
+        layout.addWidget(label(tr("AssignCategoryLabel"), "fieldLabel", self))
         self.combo = QComboBox()
-        self.combo.setMinimumHeight(30)
+        self.combo.setMinimumHeight(34)
         self.combo.addItem(tr("UncategorizedText"), None)
         for category in categories:
             self.combo.addItem(category.name, category.id)
         index = self.combo.findData(current) if current else 0
         self.combo.setCurrentIndex(max(0, index))
         layout.addWidget(self.combo)
-        layout.addSpacing(8)
-        layout.addWidget(label(tr("AssignCategoryCreateLabel"), "fieldLabel"))
+        layout.addSpacing(12)
+        layout.addWidget(label(tr("AssignCategoryCreateLabel"), "fieldLabel", self))
         row = QHBoxLayout()
         row.setSpacing(8)
         self.new_name = QLineEdit()
+        self.new_name.setMinimumHeight(34)
         self.new_name.returnPressed.connect(self._create_category)
         row.addWidget(self.new_name, 1)
         create_button = secondary_button(tr("AssignCategoryCreateButton"), "add")
-        create_button.setMinimumHeight(32)
+        create_button.setMinimumHeight(34)
         create_button.clicked.connect(self._create_category)
         row.addWidget(create_button)
         layout.addLayout(row)
-        layout.addSpacing(12)
-        layout.addLayout(_ok_cancel(self, tr("AssignCategorySaveButton")))
+        _ok_cancel(self, footer, tr("AssignCategorySaveButton"))
 
     def _create_category(self) -> None:
         name = self.new_name.text().strip()
@@ -469,26 +478,34 @@ class CategoryDeleteDialog(QDialog):
     def __init__(self, parent: QWidget | None, category: ModCategory, others: Sequence[ModCategory]) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("CategoryDeleteTitle"))
-        self.setMinimumWidth(420)
-        layout = _dialog_layout(self, 10)
-        layout.addWidget(label(category.name, "dialogHeader", wrap=True))
-        layout.addWidget(label(tr("CategoryDeleteMessage"), wrap=True))
-        layout.addSpacing(4)
-        self.unassign = QRadioButton(tr("CategoryDeleteUnassign"))
+        self.setMinimumWidth(460)
+        layout, footer = _dialog_layout(
+            self,
+            tr("CategoryDeleteTitle"),
+            subtitle=category.name,
+            kind="warning",
+            title_style="sectionTitle",
+        )
+        layout.addWidget(_body_text(tr("CategoryDeleteMessage"), self))
+        card = Card(self)
+        options = QVBoxLayout(card)
+        options.setContentsMargins(14, 12, 14, 12)
+        options.setSpacing(8)
+        self.unassign = QRadioButton(tr("CategoryDeleteUnassign"), card)
         self.unassign.setChecked(True)
-        layout.addWidget(self.unassign)
-        self.move_to = QRadioButton(tr("CategoryDeleteMoveTo"))
-        layout.addWidget(self.move_to)
-        self.target = QComboBox()
-        self.target.setMinimumHeight(30)
+        options.addWidget(self.unassign)
+        self.move_to = QRadioButton(tr("CategoryDeleteMoveTo"), card)
+        options.addWidget(self.move_to)
+        self.target = QComboBox(card)
+        self.target.setMinimumHeight(34)
         for other in others:
             self.target.addItem(other.name, other.id)
         self.target.setEnabled(False)
         self.move_to.setEnabled(bool(others))
         self.move_to.toggled.connect(self.target.setEnabled)
-        layout.addWidget(self.target)
-        layout.addSpacing(10)
-        layout.addLayout(_ok_cancel(self, tr("CategoryDeleteConfirm")))
+        options.addWidget(self.target)
+        layout.addWidget(card)
+        _ok_cancel(self, footer, tr("CategoryDeleteConfirm"))
 
     def target_id(self) -> str | None:
         return str(self.target.currentData()) if self.move_to.isChecked() and self.target.count() else None
@@ -502,55 +519,58 @@ class CategoryManagerDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("CategoryManagerTitle"))
-        self.resize(480, 460)
+        self.resize(560, 520)
+        self.setMinimumSize(480, 420)
         self.result_categories = [copy.copy(c) for c in cat.sorted_categories(categories)]
         self.reassign: dict[str, str | None] = {}
         self._usage = usage
-        layout = _dialog_layout(self, 10)
-        layout.addWidget(label(tr("CategoryManagerTitle"), "dialogHeader"))
-        body = QHBoxLayout()
-        body.setSpacing(8)
-        list_box = QVBoxLayout()
-        self.list = QListWidget()
-        self.list.itemDoubleClicked.connect(lambda _item: self._rename())
-        list_box.addWidget(self.list, 1)
-        self.empty = label(tr("CategoryManagerEmpty"), "hint")
-        list_box.addWidget(self.empty)
-        body.addLayout(list_box, 1)
-        order = QVBoxLayout()
-        order.setSpacing(4)
-        up = IconButton("up", "success", tr("ToolTipMoveUp"))
-        up.clicked.connect(lambda: self._shift(-1))
-        down = IconButton("down", "accent_text", tr("ToolTipMoveDown"))
-        down.clicked.connect(lambda: self._shift(1))
-        order.addWidget(up)
-        order.addWidget(down)
-        order.addStretch(1)
-        body.addLayout(order)
-        layout.addLayout(body, 1)
-        row = QHBoxLayout()
-        row.setSpacing(6)
+        layout, footer = _dialog_layout(self, tr("CategoryManagerTitle"), subtitle=tr("CategoryManagerHint"))
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
         for text, icon_name, slot in (
             (tr("CategoryManagerCreate"), "add", self._create),
             (tr("CategoryManagerRename"), "rename", self._rename),
             (tr("CategoryManagerDelete"), "delete", self._delete),
         ):
-            button = secondary_button(text, icon_name)
+            button = secondary_button(text, icon_name, self)
+            button.setMinimumHeight(32)
             button.clicked.connect(slot)
-            row.addWidget(button)
-        row.addStretch(1)
-        layout.addLayout(row)
-        layout.addSpacing(6)
-        layout.addLayout(_ok_cancel(self, tr("CategoryManagerSave")))
+            toolbar.addWidget(button)
+        toolbar.addStretch(1)
+        up = IconButton("up", "success", tr("ToolTipMoveUp"), self)
+        up.clicked.connect(lambda: self._shift(-1))
+        down = IconButton("down", "accent_text", tr("ToolTipMoveDown"), self)
+        down.clicked.connect(lambda: self._shift(1))
+        toolbar.addWidget(up)
+        toolbar.addWidget(down)
+        layout.addLayout(toolbar)
+        card = Card(self)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(4, 4, 4, 4)
+        card_layout.setSpacing(0)
+        self.list = QListWidget(card)
+        self.list.setObjectName("cardList")
+        self.list.setIconSize(QSize(18, 18))
+        self.list.itemDoubleClicked.connect(lambda _item: self._rename())
+        card_layout.addWidget(self.list, 1)
+        self.empty = label(tr("CategoryManagerEmpty"), "hint", card, wrap=True)
+        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty.setContentsMargins(12, 24, 12, 24)
+        card_layout.addWidget(self.empty)
+        layout.addWidget(card, 1)
+        _ok_cancel(self, footer, tr("CategoryManagerSave"))
         self._refresh()
 
     def _refresh(self, select: int | None = None) -> None:
         self.list.clear()
+        tag = icons.icon("tag", current_palette().text_secondary)
         for category in self.result_categories:
             count = self._usage.get(category.id, 0)
-            item = QListWidgetItem(f"{category.name}  ({count})")
+            item = QListWidgetItem(tag, f"{category.name}  ({count})")
             item.setData(Qt.ItemDataRole.UserRole, category.id)
+            item.setSizeHint(QSize(0, 40))
             self.list.addItem(item)
+        self.list.setVisible(bool(self.result_categories))
         self.empty.setVisible(not self.result_categories)
         if select is not None and 0 <= select < self.list.count():
             self.list.setCurrentRow(select)
@@ -629,20 +649,19 @@ class ConflictDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("ConflictCheckerTitle"))
-        self.resize(820, 520)
-        layout = _dialog_layout(self, 12)
-        header = QHBoxLayout()
-        header.setSpacing(10)
-        header.addWidget(_kind_icon("warning" if conflicts else "info", 24))
-        header.addWidget(label(tr("ConflictCheckerTitle"), "dialogHeader"))
-        header.addStretch(1)
-        layout.addLayout(header)
-        if not conflicts:
-            layout.addWidget(label(tr("ConflictCheckerEmpty"), "secondary", wrap=True))
-        card = Card()
+        self.resize(860, 560)
+        layout, footer = _dialog_layout(
+            self,
+            tr("ConflictCheckerTitle"),
+            subtitle=tr("ConflictCheckerSubtitle", len(conflicts))
+            if conflicts
+            else tr("ConflictCheckerEmpty"),
+            kind="warning" if conflicts else "success",
+        )
+        card = Card(self)
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(1, 1, 1, 1)
-        tree = QTreeWidget()
+        tree = QTreeWidget(card)
         tree.setObjectName("conflictTree")
         tree.setHeaderLabels([tr("ConflictFileHeader"), tr("ConflictModsHeader")])
         tree.setColumnWidth(0, 440)
@@ -665,7 +684,7 @@ class ConflictDialog(QDialog):
         layout.addWidget(card, 1)
         close = _dialog_button(tr("SettingsClose"), primary=True)
         close.clicked.connect(self.reject)
-        layout.addLayout(_button_row(close))
+        _add_buttons(footer, close)
 
 
 # --------------------------------------------------------------------------- progress
@@ -680,18 +699,14 @@ class BusyDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setModal(True)
-        self.setMinimumWidth(420)
-        layout = _dialog_layout(self, 14)
-        text = label(message, wrap=True)
-        font = text.font()
-        font.setPixelSize(14)
-        text.setFont(font)
-        layout.addWidget(text)
-        bar = QProgressBar()
+        self.setMinimumWidth(440)
+        layout, footer = _dialog_layout(self, title, title_style="sectionTitle", spacing=14)
+        layout.addWidget(_body_text(message, self))
+        bar = QProgressBar(self)
         bar.setRange(0, 0)
         bar.setFixedHeight(6)
         layout.addWidget(bar)
         cancel = _dialog_button(tr("CancelButton"))
         cancel.clicked.connect(self.reject)
-        layout.addLayout(_button_row(cancel))
+        _add_buttons(footer, cancel)
         self.rejected.connect(self.cancelled.emit)

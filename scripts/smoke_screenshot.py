@@ -92,7 +92,13 @@ def main() -> int:
     app.processEvents()
 
     from kcd_mod_manager.i18n import tr
-    from kcd_mod_manager.ui.dialogs import ConflictDialog, GameSelectionDialog, MessageDialog
+    from kcd_mod_manager.ui.dialogs import (
+        CategoryManagerDialog,
+        ConflictDialog,
+        DeleteConfirmDialog,
+        GameSelectionDialog,
+        MessageDialog,
+    )
     from kcd_mod_manager.ui.settings_dialog import SettingsDialog, SettingsHooks
 
     def save(widget: object, name: str, theme: str) -> None:
@@ -149,6 +155,9 @@ def main() -> int:
             "message",
             theme,
         )
+        usage = {category.id: 2}
+        show_and_save(CategoryManagerDialog(window, ctx.session.categories, usage), "categories", theme)
+        show_and_save(DeleteConfirmDialog(window, ctx.session.mods[0].name), "delete-confirm", theme)
         menu = window._mod_menu(ctx.session.mods[0])
         menu.popup(window.mapToGlobal(window.rect().center()))
         save(menu, "context-menu", theme)

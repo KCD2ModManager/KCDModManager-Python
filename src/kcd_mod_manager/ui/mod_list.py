@@ -142,9 +142,10 @@ class ModListModel(QAbstractListModel):
 
 
 # --------------------------------------------------------------------------- delegate
-ROW_HEIGHT = 52
-ROW_MARGIN_X, ROW_MARGIN_Y = 2, 1
-PAD_X = 8
+ROW_HEIGHT = 60
+ROW_MARGIN_X, ROW_MARGIN_Y = 0, 3
+PAD_X = 14
+SELECTION_BAR = 3
 BUTTON_SIZE = 28
 BUTTON_GAP = 2
 ICON_SIZE = 16
@@ -231,15 +232,15 @@ class ModDelegate(QStyledItemDelegate):
         return RowLayout(card, checkbox, warning, text, version, buttons)
 
     # ------------------------------------------------------------------ painting
-    def _background(self, mod: Mod, row: int, state: QStyle.StateFlag) -> QColor:
+    def _background(self, mod: Mod, state: QStyle.StateFlag) -> QColor:
         p = self.palette
         if state & QStyle.StateFlag.State_Selected:
-            return QColor(p.selected)
+            return QColor(p.menu_highlight)
         if state & QStyle.StateFlag.State_MouseOver:
             return QColor(p.row_hover)
         if mod.highlight is not None:
             return QColor(mod.highlight.for_theme(self.dark))
-        return QColor(p.row_even if row % 2 == 0 else p.row_odd)
+        return QColor(p.panel)
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: ModelIndex) -> None:
         mod = index.data(MOD_ROLE)
@@ -254,9 +255,20 @@ class ModDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(self._background(mod, index.row(), state))
-        painter.drawRoundedRect(QRectF(lay.card), 4, 4)
+        selected = bool(state & QStyle.StateFlag.State_Selected)
+        card = QRectF(lay.card).adjusted(0.5, 0.5, -0.5, -0.5)
+        painter.setPen(QPen(QColor(p.accent_text if selected else p.separator), 1))
+        painter.setBrush(self._background(mod, state))
+        painter.drawRoundedRect(card, 4, 4)
+        if selected:
+            bar = QPainterPath()
+            bar.addRoundedRect(card, 4, 4)
+            painter.save()
+            painter.setClipPath(bar)
+            painter.fillRect(
+                QRectF(card.left(), card.top(), SELECTION_BAR, card.height()), QColor(p.accent_text)
+            )
+            painter.restore()
 
         content_opacity = 1.0 if mod.is_enabled else DISABLED_OPACITY
         painter.setOpacity(content_opacity)
@@ -276,18 +288,18 @@ class ModDelegate(QStyledItemDelegate):
             ),
         )
         painter.setOpacity(1.0)
-        self._paint_buttons(painter, lay, mod, index.row(), bool(state & QStyle.StateFlag.State_Selected))
+        self._paint_buttons(painter, lay, mod, index.row(), selected)
 
         if mod.has_separator_after:
-            painter.setPen(QPen(QColor(p.separator), 1))
+            painter.setPen(QPen(QColor(p.accent_text), 2))
             y = rect.bottom()
-            painter.drawLine(rect.left() + 6, y, rect.right() - 6, y)
+            painter.drawLine(rect.left() + 12, y, rect.right() - 12, y)
         painter.restore()
 
     def _paint_text(self, painter: QPainter, lay: RowLayout, mod: Mod, base_font: QFont) -> None:
         p = self.palette
         name_font = _font(base_font, 14)
-        small = _font(base_font, 11)
+        small = _font(base_font, 12)
         badge_font = _font(base_font, 10)
         fm = QFontMetrics(name_font)
         has_subtitle = bool(mod.category_name)

@@ -35,12 +35,12 @@ future CLI) can use the same wiring.
 | `infrastructure/legacy_import.py` | one-time, read-only import of the WPF `user.config` |
 | `application/session.py` | the current game, mods, profiles, categories and every user operation |
 | `application/library.py` | loading mods, installing/updating/deleting, backups |
-| `ui/main_window.py` | main window, menus, row actions, startup flow |
-| `ui/mod_list.py` | `ModListModel` (drag & drop) and the painted `ModDelegate` |
+| `ui/main_window.py` | main window (navigation sidebar, mods page, footer bar), row actions, startup flow |
+| `ui/mod_list.py` | `ModListModel` (drag & drop) and the painted `ModDelegate` (one card per mod) |
 | `ui/theme.py` | light/dark palettes (values from the WPF theme dictionaries) and the QSS |
 | `ui/icons.py` | bundled Fluent UI System Icons (MIT, `resources/icons`) recoloured per theme |
-| `ui/widgets.py` | WPF-style controls: toggle switch, icon buttons, pills, search box, rounded menus |
-| `ui/settings_dialog.py`, `ui/dialogs.py` | settings window (sidebar pages) and the other dialogs |
+| `ui/widgets.py` | WPF-style controls: toggle switch, icon buttons, pills, search box, rounded menus, footer bar |
+| `ui/settings_dialog.py`, `ui/dialogs.py` | settings window (sidebar pages) and the other dialogs, all built as title + cards + footer bar |
 | `ui/tasks.py` | `TaskRunner` (serial pool for mutations, parallel pool for network/scans), `GuiInvoker` |
 | `i18n.py` | JSON translations converted from the original `.resx` files |
 

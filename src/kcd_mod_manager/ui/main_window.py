@@ -8,8 +8,18 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QPoint, Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QDragEnterEvent, QDropEvent, QIcon
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QDragEnterEvent,
+    QDropEvent,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QAbstractItemView,
     QApplication,
     QComboBox,
@@ -62,16 +72,18 @@ from kcd_mod_manager.ui.tasks import GuiInvoker, TaskRunner
 from kcd_mod_manager.ui.theme import apply_theme, current_palette, palette_for
 from kcd_mod_manager.ui.widgets import (
     Card,
+    IconButton,
     LoadingOverlay,
     Pill,
     RoundedMenu,
     SearchBox,
     ThemedIcon,
+    footer_bar,
+    hline,
     label,
     primary_button,
     refresh_theme,
     secondary_button,
-    vline,
 )
 
 log = logging.getLogger(__name__)
@@ -102,6 +114,7 @@ class MainWindow(QMainWindow):
         self._updating = False
         self._scan_cancel: threading.Event | None = None
         self._install_queue: list[tuple[Path, int, bool]] = []
+        self._cover_game: GameType | None = None
 
         self.setWindowTitle(f"KCD Mod Manager {__version__}")
         icon = resource_path("images", "logo.ico")
@@ -116,129 +129,261 @@ class MainWindow(QMainWindow):
 
     # ================================================================== construction
     def _build_ui(self) -> None:
-        menu = self.menuBar()
+        self.menuBar().hide()
         self.settings_action = QAction(tr("MenuSettings"), self)
+        self.settings_action.setShortcut("Ctrl+,")
         self.settings_action.triggered.connect(self.open_settings)
-        menu.addAction(self.settings_action)
-        tools = RoundedMenu(tr("MenuTools"), menu)
-        tools.addAction(tr("MenuCheckUpdates"), self.check_all_updates)
-        tools.addAction(tr("ConflictsButtonText"), self.show_conflicts)
-        tools.addSeparator()
-        tools.addAction(tr("MenuOpenModsFolder"), self._open_mods_folder)
-        tools.addAction(tr("MenuOpenDataFolder"), lambda: self._open(self.ctx.paths.data_dir))
-        tools.addAction(tr("MenuOpenLogFolder"), lambda: self._open(self.ctx.paths.logs_dir))
-        menu.addMenu(tools)
         self.login_action = QAction(tr("MenuLogin"), self)
         self.login_action.triggered.connect(self.login)
-        menu.addAction(self.login_action)
         self.logout_action = QAction(tr("MenuLogout"), self)
         self.logout_action.triggered.connect(self.logout)
-        menu.addAction(self.logout_action)
-
-        corner = QWidget(menu)
-        self._account_widget = corner
-        corner_layout = QHBoxLayout(corner)
-        corner_layout.setContentsMargins(0, 2, 8, 2)
-        account = QFrame()
-        account.setObjectName("accountBox")
-        account_layout = QHBoxLayout(account)
-        account_layout.setContentsMargins(8, 3, 8, 3)
-        account_layout.setSpacing(6)
-        self.account_icon = QLabel()
-        account_layout.addWidget(self.account_icon)
-        self.account_label = QLabel()
-        self.account_label.setObjectName("username")
-        account_layout.addWidget(self.account_label)
-        self.premium_badge = Pill(tr("PremiumBadge"), "premium")
-        account_layout.addWidget(self.premium_badge)
-        corner_layout.addWidget(account)
-        menu.setCornerWidget(corner, Qt.Corner.TopRightCorner)
+        for action in (self.settings_action, self.login_action, self.logout_action):
+            self.addAction(action)
 
         central = QWidget()
-        root = QVBoxLayout(central)
-        root.setContentsMargins(12, 10, 12, 6)
-        root.setSpacing(8)
+        outer = QHBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self._build_sidebar())
+        page = QVBoxLayout()
+        page.setContentsMargins(0, 0, 0, 0)
+        page.setSpacing(0)
+        page.addLayout(self._build_page(), 1)
+        page.addWidget(self._build_footer())
+        outer.addLayout(page, 1)
+        self.setCentralWidget(central)
 
-        top = QHBoxLayout()
-        top.setSpacing(4)
-        top.addWidget(label(tr("ProfilesText"), "fieldLabel"))
-        top.addSpacing(4)
-        self.profile_combo = QComboBox()
-        self.profile_combo.setFixedSize(150, 28)
-        self.profile_combo.currentIndexChanged.connect(self._profile_selected)
-        top.addWidget(self.profile_combo)
-        top.addSpacing(2)
-        self.profile_buttons: list[QPushButton] = []
-        for key, slot in (
-            ("CreateProfileText", self.create_profile),
-            ("DuplicateProfileText", self.duplicate_profile),
-            ("DeleteProfileText", self.delete_profile),
-            ("SaveProfileText", self.save_profile),
-            ("ManageCategoriesText", self.manage_categories),
-        ):
-            button = secondary_button(tr(key))
+        self._busy_widgets: list[QWidget] = [
+            self.profile_combo,
+            *self.profile_buttons,
+            self.switch_game_button,
+            self.categories_nav,
+            self.enable_all_button,
+            self.disable_all_button,
+            self.update_manifests_button,
+            self.list_view,
+            self.start_button,
+            self.add_button,
+            self.sort_button,
+            self.reload_button,
+            self.settings_nav,
+            self.settings_action,  # type: ignore[list-item]
+        ]
+
+    def _nav_button(self, text: str, icon_name: str, slot: Callable[[], object] | None = None) -> QPushButton:
+        button = QPushButton(text)
+        button.setObjectName("navButton")
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        ThemedIcon(button, icon_name, "text_secondary", 18)
+        if slot is not None:
             button.clicked.connect(slot)
-            top.addWidget(button)
-            self.profile_buttons.append(button)
-        top.addSpacing(14)
-        top.addWidget(vline())
-        top.addSpacing(14)
-        top.addWidget(label(tr("GameText"), "fieldLabel"))
-        top.addSpacing(4)
-        self.game_label = label("-", "gameName")
-        top.addWidget(self.game_label)
-        top.addSpacing(8)
-        self.switch_game_button = secondary_button(tr("SwitchGameText"))
+        return button
+
+    def _build_sidebar(self) -> QFrame:
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(250)
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(12, 18, 12, 12)
+        layout.setSpacing(6)
+
+        brand = QHBoxLayout()
+        brand.setContentsMargins(6, 0, 0, 0)
+        brand.setSpacing(10)
+        logo = QLabel(sidebar)
+        logo_file = resource_path("images", "logo.ico")
+        if logo_file.exists():
+            logo.setPixmap(QIcon(str(logo_file)).pixmap(28, 28))
+        brand.addWidget(logo)
+        brand.addWidget(label("KCD Mod Manager", "sectionTitle", sidebar))
+        brand.addStretch(1)
+        layout.addLayout(brand)
+        layout.addSpacing(10)
+
+        game_card = Card(sidebar)
+        game_layout = QVBoxLayout(game_card)
+        game_layout.setContentsMargins(12, 10, 12, 12)
+        game_layout.setSpacing(8)
+        game_row = QHBoxLayout()
+        game_row.setSpacing(10)
+        self.game_cover = QLabel(game_card)
+        self.game_cover.setFixedSize(64, 36)
+        game_row.addWidget(self.game_cover)
+        game_text = QVBoxLayout()
+        game_text.setSpacing(0)
+        game_text.addWidget(label(tr("SettingsPageGame"), "cardDescription", game_card))
+        self.game_label = label("-", "gameName", game_card, wrap=True)
+        game_text.addWidget(self.game_label)
+        game_row.addLayout(game_text, 1)
+        game_layout.addLayout(game_row)
+        self.switch_game_button = secondary_button(tr("SwitchGameText"), "games")
         self.switch_game_button.clicked.connect(self.switch_game)
-        top.addWidget(self.switch_game_button)
-        top.addStretch(1)
+        game_layout.addWidget(self.switch_game_button)
+        layout.addWidget(game_card)
 
-        self.conflicts_box = QWidget()
-        conflicts_layout = QHBoxLayout(self.conflicts_box)
-        conflicts_layout.setContentsMargins(0, 0, 0, 0)
-        conflicts_layout.setSpacing(6)
-        self.conflicts_button = secondary_button(tr("ConflictsButtonText"))
-        ThemedIcon(self.conflicts_button, "warning_filled", "warning", 14)
-        self.conflicts_button.clicked.connect(self.show_conflicts)
-        conflicts_layout.addWidget(self.conflicts_button)
-        self.conflict_badge = Pill("0", "warning")
-        self.conflict_badge.clicked.connect(self.show_conflicts)
-        conflicts_layout.addWidget(self.conflict_badge, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.conflicts_box.hide()
-        top.addWidget(self.conflicts_box)
-        self.scan_progress = QProgressBar()
-        self.scan_progress.setFixedSize(120, 6)
-        self.scan_progress.hide()
-        top.addSpacing(6)
-        top.addWidget(self.scan_progress, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.scan_cancel_button = secondary_button(tr("CancelButton"))
+        layout.addSpacing(8)
+        layout.addWidget(self._caption(tr("SidebarProfile"), sidebar))
+        self.profile_combo = QComboBox(sidebar)
+        self.profile_combo.setMinimumHeight(30)
+        self.profile_combo.currentIndexChanged.connect(self._profile_selected)
+        layout.addWidget(self.profile_combo)
+        profile_row = QHBoxLayout()
+        profile_row.setSpacing(2)
+        self.profile_buttons: list[QAbstractButton] = []
+        for key, icon_name, color, slot in (
+            ("CreateProfileText", "add", "accent_text", self.create_profile),
+            ("DuplicateProfileText", "copy", "text_secondary", self.duplicate_profile),
+            ("SaveProfileText", "save", "success", self.save_profile),
+            ("DeleteProfileText", "delete", "error", self.delete_profile),
+        ):
+            button = IconButton(icon_name, color, tr(key), sidebar)
+            button.clicked.connect(slot)
+            profile_row.addWidget(button)
+            self.profile_buttons.append(button)
+        profile_row.addStretch(1)
+        layout.addLayout(profile_row)
+
+        layout.addSpacing(6)
+        layout.addWidget(hline(sidebar))
+        layout.addSpacing(6)
+        self.mods_nav = self._nav_button(tr("ModsPageTitle"), "apps_list")
+        self.mods_nav.setCheckable(True)
+        self.mods_nav.setChecked(True)
+        self.mods_nav.clicked.connect(lambda: self.mods_nav.setChecked(True))
+        layout.addWidget(self.mods_nav)
+        self.categories_nav = self._nav_button(tr("ManageCategoriesText"), "tag", self.manage_categories)
+        layout.addWidget(self.categories_nav)
+
+        self.conflicts_button = self._nav_button(tr("ConflictsButtonText"), "warning", self.show_conflicts)
+        conflicts_layout = QHBoxLayout(self.conflicts_button)
+        conflicts_layout.setContentsMargins(0, 0, 10, 0)
+        conflicts_layout.addStretch(1)
+        self.conflict_badge = Pill("0", "warning", self.conflicts_button)
+        self.conflict_badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.conflict_badge.hide()
+        conflicts_layout.addWidget(self.conflict_badge)
+        layout.addWidget(self.conflicts_button)
+        self.scan_row = QWidget(sidebar)
+        scan_layout = QHBoxLayout(self.scan_row)
+        scan_layout.setContentsMargins(13, 0, 4, 0)
+        scan_layout.setSpacing(6)
+        self.scan_progress = QProgressBar(self.scan_row)
+        self.scan_progress.setFixedHeight(6)
+        scan_layout.addWidget(self.scan_progress, 1)
+        self.scan_cancel_button = IconButton("dismiss", "text_secondary", tr("CancelButton"), self.scan_row)
         self.scan_cancel_button.clicked.connect(self.cancel_scan)
-        self.scan_cancel_button.hide()
-        top.addWidget(self.scan_cancel_button)
-        root.addLayout(top)
+        scan_layout.addWidget(self.scan_cancel_button)
+        self.scan_row.hide()
+        layout.addWidget(self.scan_row)
 
-        bar = QHBoxLayout()
-        bar.setSpacing(4)
+        self.updates_nav = self._nav_button(tr("MenuCheckUpdates"), "update", self.check_all_updates)
+        layout.addWidget(self.updates_nav)
+        self.folders_nav = self._nav_button(tr("NavFolders"), "folder")
+        folders_menu = RoundedMenu("", self.folders_nav)
+        folders_menu.addAction(tr("MenuOpenModsFolder"), self._open_mods_folder)
+        folders_menu.addAction(tr("MenuOpenDataFolder"), lambda: self._open(self.ctx.paths.data_dir))
+        folders_menu.addAction(tr("MenuOpenLogFolder"), lambda: self._open(self.ctx.paths.logs_dir))
+        self.folders_nav.clicked.connect(
+            lambda: folders_menu.exec(self.folders_nav.mapToGlobal(self.folders_nav.rect().topRight()))
+        )
+        layout.addWidget(self.folders_nav)
+        self.settings_nav = self._nav_button(tr("MenuSettings"), "settings", self.open_settings)
+        layout.addWidget(self.settings_nav)
+        layout.addStretch(1)
+
+        account = QFrame(sidebar)
+        account.setObjectName("card")
+        account_layout = QVBoxLayout(account)
+        account_layout.setContentsMargins(12, 10, 12, 10)
+        account_layout.setSpacing(8)
+        who = QHBoxLayout()
+        who.setSpacing(8)
+        self.account_icon = QLabel(account)
+        self.account_icon.setFixedSize(20, 20)
+        who.addWidget(self.account_icon)
+        self.account_label = label("", "username", account)
+        self.account_label.setWordWrap(True)
+        who.addWidget(self.account_label, 1)
+        self.premium_badge = Pill(tr("PremiumBadge"), "premium", account)
+        who.addWidget(self.premium_badge)
+        account_layout.addLayout(who)
+        self.account_button = secondary_button(tr("MenuLogin"))
+        self._account_button_icon = ThemedIcon(self.account_button, "person", "text", 14)
+        self.account_button.clicked.connect(self._account_clicked)
+        account_layout.addWidget(self.account_button)
+        layout.addWidget(account)
+        return sidebar
+
+    @staticmethod
+    def _caption(text: str, parent: QWidget) -> QLabel:
+        caption = label(text, "fieldLabel", parent)
+        caption.setContentsMargins(4, 0, 0, 0)
+        return caption
+
+    def _build_page(self) -> QVBoxLayout:
+        page = QVBoxLayout()
+        page.setContentsMargins(28, 22, 28, 12)
+        page.setSpacing(12)
+
+        header = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
+        titles.addWidget(label(tr("ModsPageTitle"), "pageTitle"))
+        self.page_subtitle = label("", "cardDescription")
+        titles.addWidget(self.page_subtitle)
+        header.addLayout(titles)
+        header.addStretch(1)
+        self.enabled_label = Pill("", "success")
+        header.addWidget(self.enabled_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        page.addLayout(header)
+
+        filters = QHBoxLayout()
+        filters.setSpacing(8)
+        self.search_edit = SearchBox(tr("SearchPlaceholder"), tr("ToolTipClearSearch"))
+        self.search_edit.setMaximumWidth(420)
+        self.search_edit.textChanged.connect(self._search_changed)
+        filters.addWidget(self.search_edit, 1)
+        self.category_row = QWidget()
+        category_layout = QHBoxLayout(self.category_row)
+        category_layout.setContentsMargins(0, 0, 0, 0)
+        category_layout.setSpacing(6)
+        self.category_combo = QComboBox(self.category_row)
+        self.category_combo.setMinimumSize(180, 34)
+        self.category_combo.setToolTip(tr("FilterCategoryText"))
+        self.category_combo.currentIndexChanged.connect(self._category_filter_changed)
+        category_layout.addWidget(self.category_combo)
+        filters.addWidget(self.category_row)
+        filters.addStretch(1)
+        self.sort_button = secondary_button("", "sort")
+        self.sort_button.setMinimumHeight(34)
+        self.sort_button.clicked.connect(self.cycle_sort)
+        filters.addWidget(self.sort_button)
+        self.reload_button = secondary_button(tr("ButtonReloadMods"), "reload")
+        self.reload_button.setMinimumHeight(34)
+        self.reload_button.clicked.connect(self.reload)
+        filters.addWidget(self.reload_button)
+        page.addLayout(filters)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(6)
         self.enable_all_button = secondary_button(tr("EnableAllModsText"), "checkmark")
         self.enable_all_button.clicked.connect(lambda: self.set_all_enabled(True))
         self.disable_all_button = secondary_button(tr("DisableAllModsText"), "dismiss")
         self.disable_all_button.clicked.connect(lambda: self.set_all_enabled(False))
         self.update_manifests_button = secondary_button(tr("UpdateAllManifestsText"), "update")
         self.update_manifests_button.clicked.connect(self.update_all_manifests)
-        bar.addWidget(self.enable_all_button)
-        bar.addWidget(self.disable_all_button)
-        bar.addStretch(1)
-        bar.addWidget(self.update_manifests_button)
-        root.addLayout(bar)
+        actions.addWidget(self.enable_all_button)
+        actions.addWidget(self.disable_all_button)
+        actions.addStretch(1)
+        actions.addWidget(self.update_manifests_button)
+        page.addLayout(actions)
 
-        body = QHBoxLayout()
-        body.setSpacing(10)
-        self.list_card = Card()
-        list_layout = QVBoxLayout(self.list_card)
-        list_layout.setContentsMargins(1, 1, 1, 1)
+        self.list_host = QWidget()
+        list_layout = QVBoxLayout(self.list_host)
+        list_layout.setContentsMargins(0, 0, 0, 0)
         self.model = ModListModel(self)
         self.model.move_requested.connect(self._drop_move)
-        self.list_view = QListView()
+        self.list_view = QListView(self.list_host)
         self.list_view.setObjectName("modList")
         self.list_view.setModel(self.model)
         self.list_view.setMouseTracking(True)
@@ -261,73 +406,37 @@ class MainWindow(QMainWindow):
         self.delegate.action.connect(self._row_action)
         self.list_view.setItemDelegate(self.delegate)
         list_layout.addWidget(self.list_view)
-        self.loading_overlay = LoadingOverlay(self.list_card, tr("LoadingModsText"))
-        body.addWidget(self.list_card, 2)
+        self.loading_overlay = LoadingOverlay(self.list_host, tr("LoadingModsText"))
+        page.addWidget(self.list_host, 1)
+        return page
 
-        side = Card()
-        side.setMinimumWidth(250)
-        side_layout = QVBoxLayout(side)
-        side_layout.setContentsMargins(10, 10, 10, 10)
-        side_layout.setSpacing(10)
-        self.enabled_label = Pill("", "success")
-        side_layout.addWidget(self.enabled_label, 0, Qt.AlignmentFlag.AlignLeft)
-        self.search_edit = SearchBox(tr("SearchPlaceholder"), tr("ToolTipClearSearch"))
-        self.search_edit.textChanged.connect(self._search_changed)
-        side_layout.addWidget(self.search_edit)
-        self.category_row = QWidget()
-        category_layout = QVBoxLayout(self.category_row)
-        category_layout.setContentsMargins(0, 0, 0, 0)
-        category_layout.setSpacing(4)
-        category_layout.addWidget(label(tr("FilterCategoryText"), "secondary"))
-        self.category_combo = QComboBox()
-        self.category_combo.setMinimumHeight(28)
-        self.category_combo.currentIndexChanged.connect(self._category_filter_changed)
-        category_layout.addWidget(self.category_combo)
-        side_layout.addWidget(self.category_row)
-        side_layout.addStretch(1)
-        self.start_button = primary_button(tr("ButtonStartGame"), "play_filled")
-        self.start_button.clicked.connect(self.start_game)
-        self.add_button = primary_button(tr("ButtonAddMod"), "add")
+    def _build_footer(self) -> QFrame:
+        bar, footer = footer_bar(margin=28)
+        self.status_label = label(tr("StatusReady"), "statusText")
+        footer.addWidget(self.status_label)
+        self.status_progress = QProgressBar()
+        self.status_progress.setFixedSize(160, 6)
+        self.status_progress.hide()
+        footer.addWidget(self.status_progress, 0, Qt.AlignmentFlag.AlignVCenter)
+        footer.addStretch(1)
+        self.add_button = secondary_button(tr("ButtonAddMod"), "add")
+        self.add_button.setMinimumSize(130, 40)
         self._add_menu = RoundedMenu("", self.add_button)
         self._add_menu.addAction(tr("ButtonAddMod") + "...", self.add_mod)
         self._add_menu.addAction(tr("AddModFolder") + "...", self.add_mod_folder)
         self.add_button.clicked.connect(self._show_add_menu)
-        self.sort_button = primary_button("", "sort")
-        self.sort_button.clicked.connect(self.cycle_sort)
-        self.reload_button = primary_button(tr("ButtonReloadMods"), "reload")
-        self.reload_button.clicked.connect(self.reload)
-        for button in (self.start_button, self.add_button, self.sort_button, self.reload_button):
-            side_layout.addWidget(button)
-        body.addWidget(side, 1)
-        root.addLayout(body, 1)
+        footer.addWidget(self.add_button)
+        self.start_button = primary_button(tr("ButtonStartGame"), "play_filled")
+        self.start_button.setMinimumWidth(180)
+        self.start_button.clicked.connect(self.start_game)
+        footer.addWidget(self.start_button)
+        return bar
 
-        status_row = QHBoxLayout()
-        status_row.setContentsMargins(2, 0, 2, 0)
-        status_row.addStretch(1)
-        self.status_progress = QProgressBar()
-        self.status_progress.setFixedSize(160, 6)
-        self.status_progress.hide()
-        status_row.addWidget(self.status_progress, 0, Qt.AlignmentFlag.AlignVCenter)
-        status_row.addSpacing(8)
-        self.status_label = label(tr("StatusReady"), "statusText")
-        status_row.addWidget(self.status_label)
-        root.addLayout(status_row)
-        self.setCentralWidget(central)
-
-        self._busy_widgets: list[QWidget] = [
-            self.profile_combo,
-            *self.profile_buttons,
-            self.switch_game_button,
-            self.enable_all_button,
-            self.disable_all_button,
-            self.update_manifests_button,
-            self.list_view,
-            self.start_button,
-            self.add_button,
-            self.sort_button,
-            self.reload_button,
-            self.settings_action,  # type: ignore[list-item]
-        ]
+    def _account_clicked(self) -> None:
+        if self.ctx.nexus.is_logged_in:
+            self.logout()
+        else:
+            self.login()
 
     def _show_add_menu(self) -> None:
         p = current_palette()
@@ -335,13 +444,47 @@ class MainWindow(QMainWindow):
         archive.setIcon(icons.icon("archive", p.text_secondary))
         folder.setIcon(icons.icon("folder_add", p.text_secondary))
         self._add_menu.setMinimumWidth(self.add_button.width())
-        self._add_menu.exec(self.add_button.mapToGlobal(self.add_button.rect().bottomLeft()))
+        height = self._add_menu.sizeHint().height()
+        self._add_menu.exec(
+            self.add_button.mapToGlobal(self.add_button.rect().topLeft()) - QPoint(0, height + 4)
+        )
 
     def _show_loading(self, visible: bool) -> None:
         if visible:
             self.loading_overlay.show_overlay(tr("LoadingModsText"))
         else:
             self.loading_overlay.hide()
+
+    def _refresh_game_cover(self) -> None:
+        game = self.session.game
+        if game is None:
+            self.game_cover.clear()
+            return
+        image = QPixmap(str(resource_path("images", "kcd1.jpg" if game is GameType.KCD1 else "kcd2.jpg")))
+        if image.isNull():
+            return
+        ratio = self.devicePixelRatioF()
+        size = self.game_cover.size() * ratio
+        scaled = image.scaled(
+            size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation
+        )
+        crop = scaled.copy(
+            (scaled.width() - size.width()) // 2,
+            (scaled.height() - size.height()) // 2,
+            size.width(),
+            size.height(),
+        )
+        rounded = QPixmap(crop.size())
+        rounded.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, crop.width(), crop.height(), 4 * ratio, 4 * ratio)
+        painter.setClipPath(path)
+        painter.drawPixmap(0, 0, crop)
+        painter.end()
+        rounded.setDevicePixelRatio(ratio)
+        self.game_cover.setPixmap(rounded)
 
     # ================================================================== theme & geometry
     def apply_theme(self) -> None:
@@ -463,7 +606,13 @@ class MainWindow(QMainWindow):
                 if row >= 0:
                     self.list_view.setCurrentIndex(self.model.index(row))
             enabled = sum(1 for m in self.session.mods if m.is_enabled)
-            self.enabled_label.setText(tr("ModsEnabled", f"{enabled}/{len(self.session.mods)}"))
+            total = len(self.session.mods)
+            self.enabled_label.setText(tr("ModsEnabled", f"{enabled}/{total}"))
+            shown = self.model.rowCount()
+            subtitle = tr("ModsPageSubtitle", enabled, total)
+            if shown != total:
+                subtitle += f"  \u00b7  {tr('ModsPageShown', shown)}"
+            self.page_subtitle.setText(subtitle)
             searching = bool(self.search.strip())
             self.sort_button.setText(
                 tr("ButtonSortDisabled") if searching else tr(SORT_LABELS[self.sort_mode])
@@ -473,10 +622,13 @@ class MainWindow(QMainWindow):
             self._refresh_profiles_combo()
             game = self.session.game
             self.game_label.setText(tr(game.display_key) if game else "-")
+            if game is not self._cover_game:
+                self._cover_game = game
+                self._refresh_game_cover()
             self._refresh_account()
             count = len(self.session.conflicts)
             self.conflict_badge.setText(str(count))
-            self.conflicts_box.setVisible(count > 0)
+            self.conflict_badge.setVisible(count > 0)
             self.category_row.setVisible(bool(self.session.categories))
         finally:
             self._updating = False
@@ -513,6 +665,8 @@ class MainWindow(QMainWindow):
         logged_in = nexus.is_logged_in
         self.login_action.setVisible(not logged_in)
         self.logout_action.setVisible(logged_in)
+        self.account_button.setText(tr("MenuLogout") if logged_in else tr("MenuLogin"))
+        self._account_button_icon.set("sign_out" if logged_in else "person")
         self.account_label.setText((nexus.username or "?") if logged_in else tr("InfoNotLoggedIn"))
         self.account_label.setToolTip(tr("InfoLoggedInAs", nexus.username or "?") if logged_in else "")
         self.premium_badge.setVisible(logged_in and nexus.is_premium)
@@ -1000,8 +1154,7 @@ class MainWindow(QMainWindow):
         cancel = threading.Event()
         self._scan_cancel = cancel
         self.scan_progress.setValue(0)
-        self.scan_progress.show()
-        self.scan_cancel_button.show()
+        self.scan_row.show()
         self.conflicts_button.setEnabled(False)
 
         def work(progress: Callable[[object], None]) -> list[ConflictGroup]:
@@ -1009,8 +1162,7 @@ class MainWindow(QMainWindow):
 
         def finish() -> None:
             self._scan_cancel = None
-            self.scan_progress.hide()
-            self.scan_cancel_button.hide()
+            self.scan_row.hide()
             self.conflicts_button.setEnabled(True)
 
         def done(conflicts: list[ConflictGroup]) -> None:

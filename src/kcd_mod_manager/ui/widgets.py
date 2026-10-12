@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QAbstractButton,
     QFrame,
     QGraphicsDropShadowEffect,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMenu,
@@ -369,6 +370,16 @@ def hline(parent: QWidget | None = None) -> QFrame:
     line.setObjectName("hline")
     line.setFixedHeight(1)
     return line
+
+
+def footer_bar(parent: QWidget | None = None, margin: int = 24) -> tuple[QFrame, QHBoxLayout]:
+    """Panel-coloured bottom bar with a top separator, shared by the main window and all dialogs."""
+    bar = QFrame(parent)
+    bar.setObjectName("footerBar")
+    layout = QHBoxLayout(bar)
+    layout.setContentsMargins(margin, 12, margin, 12)
+    layout.setSpacing(10)
+    return bar, layout
 
 
 def vline(parent: QWidget | None = None) -> QFrame:

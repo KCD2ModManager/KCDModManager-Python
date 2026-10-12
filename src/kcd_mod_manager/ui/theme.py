@@ -170,6 +170,8 @@ QFrame#card, QWidget#card {{
 QFrame#card QLabel, QFrame#card QCheckBox, QFrame#card QRadioButton {{ background: transparent; }}
 QFrame#gameCard {{ background-color: {p.panel}; border: 2px solid {p.separator}; border-radius: 8px; }}
 QFrame#gameCard:hover {{ border: 2px solid {p.accent_text}; }}
+QFrame#footerBar {{ background-color: {p.panel}; border: none; border-top: 1px solid {p.separator}; }}
+QFrame#footerBar QLabel, QFrame#footerBar QCheckBox {{ background: transparent; }}
 QFrame#sidebar {{ background-color: {p.panel}; border: none; border-right: 1px solid {p.separator}; }}
 QFrame#accountBox {{ background-color: {p.panel}; border: 1px solid {p.separator}; border-radius: 4px; }}
 QFrame#hline {{ background-color: {p.separator}; border: none; max-height: 1px; min-height: 1px; }}
@@ -202,6 +204,14 @@ QPushButton#dialogPrimary {{
 }}
 QPushButton#dialogPrimary:hover {{ background-color: {p.primary_hover}; border-color: {p.primary_hover}; }}
 QPushButton#dialogPrimary:pressed {{ background-color: {p.primary_pressed}; }}
+QPushButton#navButton {{
+    background: transparent; border: none; border-left: 3px solid transparent; border-radius: 4px;
+    text-align: left; padding: 8px 10px; font-size: 13px; min-height: 20px; min-width: 0;
+}}
+QPushButton#navButton:hover {{ background-color: {p.menu_hover}; }}
+QPushButton#navButton:pressed {{ background-color: {p.selected}; }}
+QPushButton#navButton:checked {{ background-color: {p.menu_highlight}; border-left: 3px solid {p.accent_text}; }}
+QPushButton#navButton:disabled {{ background: transparent; color: {p.text_disabled}; }}
 QToolButton#iconButton {{
     background: transparent; border: none; border-radius: 4px; padding: 0; min-height: 0;
 }}
@@ -266,12 +276,20 @@ QListView, QListWidget, QTreeWidget, QTableWidget {{
     background-color: {p.panel}; color: {p.text}; border: 1px solid {p.separator}; border-radius: 4px;
     alternate-background-color: {p.row_odd}; outline: 0;
 }}
-QListView#modList {{ border: none; background-color: {p.panel}; padding: 2px; }}
+QListView#modList {{ border: none; background-color: {p.window}; padding: 0; }}
 QTreeWidget#conflictTree {{ border: none; }}
 QListWidget::item, QTreeWidget::item {{ padding: 6px 8px; border-radius: 2px; }}
 QListWidget::item:hover, QTreeWidget::item:hover {{ background-color: {p.row_hover}; }}
 QListWidget::item:selected, QTreeWidget::item:selected, QTableWidget::item:selected {{
     background-color: {p.selected}; color: {p.text};
+}}
+QListWidget#cardList {{ background: transparent; border: none; padding: 0; }}
+QListWidget#cardList::item {{
+    padding: 0 10px; margin: 1px 0; border-radius: 4px; border-left: 3px solid transparent; font-size: 13px;
+}}
+QListWidget#cardList::item:hover {{ background-color: {p.menu_hover}; }}
+QListWidget#cardList::item:selected {{
+    background-color: {p.menu_highlight}; border-left: 3px solid {p.accent_text}; color: {p.text};
 }}
 QListWidget#settingsNav {{ background: transparent; border: none; padding: 0; }}
 QListWidget#settingsNav::item {{ padding: 8px 10px; margin: 1px 0; border-radius: 4px; border-left: 3px solid transparent; }}

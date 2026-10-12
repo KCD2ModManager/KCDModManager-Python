@@ -6,11 +6,13 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QMimeData, QModelIndex
+from PySide6.QtCore import QEvent, QMimeData, QModelIndex, QObject
+from PySide6.QtWidgets import QApplication, QWidget
 from pytestqt.qtbot import QtBot
 
 from kcd_mod_manager.bootstrap import AppContext, build_context
 from kcd_mod_manager.domain.models import GameType
+from kcd_mod_manager.i18n import tr
 from kcd_mod_manager.infrastructure.app_paths import AppPaths
 from kcd_mod_manager.infrastructure.credentials import MemoryCredentialStore
 from kcd_mod_manager.infrastructure.game_detection import GameDetector
@@ -76,7 +78,9 @@ def test_startup_loads_mods_profile_and_conflicts(window: MainWindow, game_root:
     assert window.enabled_label.text().endswith("/3")
     assert len(window.session.conflicts) == 1
     assert window.conflict_badge.text() == "1"
-    assert window.conflicts_box.isVisibleTo(window)
+    assert window.conflict_badge.isVisibleTo(window)
+    assert window.page_subtitle.text() == tr("ModsPageSubtitle", 3, 3)
+    assert not window.scan_row.isVisibleTo(window)
     assert not window.category_row.isVisibleTo(window)
     window.list_view.viewport().grab()  # exercises the delegate painting
 
@@ -84,7 +88,8 @@ def test_startup_loads_mods_profile_and_conflicts(window: MainWindow, game_root:
 def test_conflicts_button_only_shown_with_conflicts(window: MainWindow) -> None:
     window.session.conflicts = []
     window.refresh_view()
-    assert not window.conflicts_box.isVisibleTo(window)
+    assert not window.conflict_badge.isVisibleTo(window)
+    assert window.conflicts_button.isVisibleTo(window)
     window.session.create_category("Gameplay")
     window.refresh_view()
     assert window.category_row.isVisibleTo(window)
@@ -207,6 +212,33 @@ def test_settings_pages_navigate(qtbot: QtBot, window: MainWindow) -> None:
     assert dialog.pages.currentIndex() == 1
     assert set(dialog.toggles) >= {"is_dark_mode", "mod_order_enabled", "create_backup"}
     dialog.grab()
+
+
+class _WindowShowSpy(QObject):
+    def __init__(self) -> None:
+        super().__init__()
+        self.shown: list[QWidget] = []
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.Show and isinstance(watched, QWidget) and watched.isWindow():
+            self.shown.append(watched)
+        return False
+
+
+def test_opening_settings_shows_no_stray_windows(qtbot: QtBot, window: MainWindow) -> None:
+    app = QApplication.instance()
+    assert app is not None
+    spy = _WindowShowSpy()
+    app.installEventFilter(spy)
+    try:
+        dialog = SettingsDialog(window, window.settings, window.session.installs, hooks=window_hooks(window))
+        qtbot.addWidget(dialog)
+        dialog.show()
+        for key, _icon, _title in SettingsDialog.PAGES:
+            dialog.show_page(key)
+    finally:
+        app.removeEventFilter(spy)
+    assert spy.shown == [dialog]
 
 
 def test_mod_order_toggle_reverts_when_apply_fails(qtbot: QtBot, window: MainWindow) -> None:

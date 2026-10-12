@@ -30,7 +30,7 @@ from kcd_mod_manager.domain.models import GameInstall, GameType, Mod
 from kcd_mod_manager.i18n import LANGUAGE_NAMES, tr
 from kcd_mod_manager.ui import dialogs, icons
 from kcd_mod_manager.ui.theme import current_palette
-from kcd_mod_manager.ui.widgets import Card, ToggleSwitch, hline, label, secondary_button
+from kcd_mod_manager.ui.widgets import Card, ToggleSwitch, footer_bar, label, secondary_button
 
 MOD_ID_ROLE = Qt.ItemDataRole.UserRole
 
@@ -140,9 +140,7 @@ class SettingsDialog(QDialog):
         right.setSpacing(0)
         self.pages = QStackedWidget()
         right.addWidget(self.pages, 1)
-        right.addWidget(hline())
-        footer = QHBoxLayout()
-        footer.setContentsMargins(24, 12, 24, 12)
+        bar, footer = footer_bar()
         footer.addStretch(1)
         close = QPushButton(tr("SettingsClose"))
         close.setObjectName("dialogPrimary")
@@ -150,7 +148,7 @@ class SettingsDialog(QDialog):
         close.setDefault(True)
         close.clicked.connect(self.accept)
         footer.addWidget(close)
-        right.addLayout(footer)
+        right.addWidget(bar)
         outer.addLayout(right, 1)
 
         builders = {
