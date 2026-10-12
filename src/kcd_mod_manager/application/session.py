@@ -385,7 +385,13 @@ class ManagerSession:
     def install_folder(self, folder: Path) -> InstallResult:
         return self._add_installed(self.library.install_folder(folder, self.mods_dir, self.settings))
 
+    @staticmethod
+    def _require_local(mod: Mod) -> None:
+        if mod.is_workshop_mod:
+            raise SessionError("Steam Workshop mods are managed by Steam and cannot be changed here.")
+
     def delete_mod(self, mod: Mod) -> None:
+        self._require_local(mod)
         self.library.delete_mod_files(mod)
         self.mods = [m for m in self.mods if m is not mod]
         self.save_mod_order()
@@ -396,6 +402,10 @@ class ManagerSession:
     # ------------------------------------------------------------------ per-mod metadata
     def rename_display(self, mod: Mod, new_name: str) -> None:
         new_name = new_name.strip()
+        if mod.is_workshop_mod:
+            mod.name = new_name
+            self.user_data.update_entry(mod.id, lambda e: setattr(e, "custom_name", new_name))
+            return
         if mod.path is None:
             raise SessionError("The mod folder does not exist or is not specified.")
         manifest = mf.find_manifest(mod.path)
@@ -411,6 +421,7 @@ class ManagerSession:
         """Change mod id and folder to match ``new_name``. Returns the new id."""
         if not self.settings.enable_file_renaming:
             raise SessionError("Enable file renaming first if you want to change mod id and folder.")
+        self._require_local(mod)
         if mod.path is None:
             raise SessionError("The mod folder does not exist or is not specified.")
         old_id = mod.id
@@ -510,9 +521,9 @@ class ManagerSession:
 
     # ------------------------------------------------------------------ categories
     def set_category(self, mod: Mod, category_id: str | None) -> None:
-        if self.user_data.exists():
+        if self.user_data.exists() or mod.is_workshop_mod:
             self.user_data.update_entry(mod.id, lambda e: setattr(e, "category_id", category_id or None))
-            if mod.path is not None:
+            if mod.path is not None and not mod.is_workshop_mod:
                 ModSidecar(mod.path).set_category(None)
         elif mod.path is not None:
             ModSidecar(mod.path).set_category(category_id)
@@ -609,6 +620,7 @@ class ManagerSession:
         """Premium flow: download the newest file and replace the mod in place."""
         if self.nexus is None or self.game is None:
             raise SessionError("Nexus is not available.")
+        self._require_local(mod)
         domain = self.game.nexus_domain
         newest = latest_file(self.nexus.mod_files(domain, mod.mod_number))
         if newest is None:

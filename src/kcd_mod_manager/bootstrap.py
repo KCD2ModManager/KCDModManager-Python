@@ -39,6 +39,11 @@ class AppContext:
     first_run: bool
     imported_legacy: bool
 
+    @property
+    def settings_recovered(self) -> bool:
+        """settings.json was unreadable; a copy was preserved and defaults were loaded."""
+        return self.session.settings_store.recovered_from_corruption
+
 
 def load_settings(
     paths: AppPaths, credentials: CredentialStore

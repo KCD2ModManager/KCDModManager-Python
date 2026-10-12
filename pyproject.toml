@@ -63,6 +63,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["PTH", "N", "E501"]
+"src/kcd_mod_manager/ui/theme.py" = ["E501"]
 
 [tool.pyright]
 include = ["src", "tests"]

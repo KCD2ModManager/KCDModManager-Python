@@ -53,6 +53,9 @@ class OrderFileManager:
         self._sleep = sleep
         self._lock = threading.Lock()
 
+    def set_retry_prompt(self, prompt: RetryPrompt | None) -> None:
+        self._retry_prompt = prompt
+
     @staticmethod
     def active_file(mods_dir: Path, mod_order_enabled: bool) -> Path:
         return mods_dir / (MOD_ORDER_FILE if mod_order_enabled else MOD_ORDER_BACKUP_FILE)
