@@ -53,6 +53,22 @@ def run_self_test(report: Path | None = None) -> int:
     check("kcd1.jpg", lambda: image("kcd1.jpg"))
     check("kcd2.jpg", lambda: image("kcd2.jpg"))
     check("translations", translations)
+
+    def svg_icons() -> str:
+        from kcd_mod_manager.ui import icons
+
+        names = icons.available()
+        if not names:
+            raise RuntimeError("no icons bundled")
+        for name in names:
+            if icons.pixmap(name, "#0078D4", 16, 1.0).toImage().isNull():
+                raise RuntimeError(f"cannot render {name}")
+        # QSS url() images go through the SVG image-format plugin, not QtSvg directly.
+        if QImage(icons.stylesheet_url("checkmark_filled", "#FFFFFF")).isNull():
+            raise RuntimeError("SVG image-format plugin missing")
+        return str(len(names))
+
+    check("icons", svg_icons)
     for module in ("py7zr", "rarfile", "httpx", "keyring", "websockets", "kcd_mod_manager.ui.main_window"):
         check(module, lambda m=module: bool(importlib.import_module(m)))
 

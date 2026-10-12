@@ -49,6 +49,7 @@ if IS_WINDOWS:
 datas = [
     (str(RES / "i18n"), "kcd_mod_manager/resources/i18n"),
     (str(RES / "images"), "kcd_mod_manager/resources/images"),
+    (str(RES / "icons"), "kcd_mod_manager/resources/icons"),
     (str(ROOT / "LICENSE"), "."),
 ]
 
