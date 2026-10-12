@@ -91,6 +91,25 @@ Packaging choices:
   from inside the sandbox needs `flatpak-spawn`, which works against what a mod manager does. The
   Linux build runs on Ubuntu 22.04 so the glibc requirement stays low.
 
+### Publishing to Nexus Mods
+
+Pushing a release tag (for example `v5.0.1`) builds both platforms, creates the GitHub release
+and then uploads the Windows portable ZIP as a new version of the main file on both the KCD1 and
+the KCD2 mod page, archiving the previous version. It uses the official
+[Nexus-Mods/upload-action](https://github.com/Nexus-Mods/upload-action). Tags containing `-`
+(such as `v5.1.0-rc1`) are released on GitHub only.
+
+One-time setup in the GitHub repository settings (Secrets and variables, then Actions):
+
+| Kind | Name | Value |
+| --- | --- | --- |
+| Secret | `NEXUSMODS_API_KEY` | API key from <https://www.nexusmods.com/settings/api-keys> |
+| Variable | `NEXUSMODS_FILE_ID_KCD1` | File ID of the main file on the KCD1 mod page |
+| Variable | `NEXUSMODS_FILE_ID_KCD2` | File ID of the main file on the KCD2 mod page |
+
+If the secret or a file ID is missing, that upload is skipped with a warning instead of failing
+the release. The key is only read from the secret and is never written to logs or artifacts.
+
 ## Project layout
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

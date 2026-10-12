@@ -34,3 +34,60 @@ jobs:
             --title "KCD Mod Manager ${GITHUB_REF_NAME#v}" \
             --generate-notes \
             --verify-tag
+
+  nexus:
+    name: Nexus Mods (${{ matrix.page }})
+    needs: publish
+    # Pre-release tags (v5.1.0-rc1) stay on GitHub only.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - page: KCD1
+            file_id: ${{ vars.NEXUSMODS_FILE_ID_KCD1 }}
+          - page: KCD2
+            file_id: ${{ vars.NEXUSMODS_FILE_ID_KCD2 }}
+    steps:
+      - name: Check configuration
+        id: config
+        env:
+          API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
+          FILE_ID: ${{ matrix.file_id }}
+        run: |
+          if [ -z "$API_KEY" ] || [ -z "$FILE_ID" ]; then
+            echo "::warning::Skipping ${{ matrix.page }}: NEXUSMODS_API_KEY secret or file ID variable is not set."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        if: steps.config.outputs.enabled == 'true'
+        with:
+          name: release-windows
+          path: release
+
+      - name: Locate portable zip
+        id: zip
+        if: steps.config.outputs.enabled == 'true'
+        run: |
+          file="release/KCDModManager-${{ steps.config.outputs.version }}-windows-x64-portable.zip"
+          test -f "$file" || { echo "::error::$file not found"; ls -l release; exit 1; }
+          echo "path=$file" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to Nexus Mods
+        if: steps.config.outputs.enabled == 'true'
+        # v1.0.0-beta.11, pinned to the commit because the action is still in beta.
+        uses: Nexus-Mods/upload-action@98532f7670c27cbecc78fae03fa3e278147827e2
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: ${{ matrix.file_id }}
+          filename: ${{ steps.zip.outputs.path }}
+          version: ${{ steps.config.outputs.version }}
+          display_name: KCD Mod Manager ${{ steps.config.outputs.version }}
+          description: Portable Windows build. Release notes are on GitHub.
+          category: main
+          archive_existing_version: "true"
