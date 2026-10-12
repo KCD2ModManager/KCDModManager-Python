@@ -58,10 +58,11 @@ ignore = [
     "N802",   # Qt overrides use camelCase (paintEvent, dropEvent, ...)
     "RUF001", # localized strings legitimately contain non-ASCII characters
     "RUF012",
+    "N818",   # exception names describe the condition (NexusRateLimited, ScanCancelled)
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["PTH", "N"]
+"tests/**" = ["PTH", "N", "E501"]
 
 [tool.pyright]
 include = ["src", "tests"]
