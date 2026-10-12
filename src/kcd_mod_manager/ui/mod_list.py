@@ -14,6 +14,7 @@ from PySide6.QtCore import (
     QPoint,
     QPointF,
     QRect,
+    QRectF,
     QSize,
     Qt,
     Signal,
@@ -40,6 +41,7 @@ from PySide6.QtWidgets import (
 
 from kcd_mod_manager.domain.models import Mod
 from kcd_mod_manager.i18n import tr
+from kcd_mod_manager.ui import icons
 from kcd_mod_manager.ui.theme import Palette
 
 MOD_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -140,14 +142,36 @@ class ModListModel(QAbstractListModel):
 
 
 # --------------------------------------------------------------------------- delegate
-ROW_HEIGHT = 50
-BUTTON_SIZE = 26
-BUTTON_GAP = 3
-VERSION_WIDTH = 120
+ROW_HEIGHT = 52
+ROW_MARGIN_X, ROW_MARGIN_Y = 2, 1
+PAD_X = 8
+BUTTON_SIZE = 28
+BUTTON_GAP = 2
+ICON_SIZE = 16
+VERSION_WIDTH = 72
+DISABLED_OPACITY = 0.6
+
+BUTTON_COLORS = {
+    "update": "accent_text",
+    "up": "success",
+    "down": "accent_text",
+    "delete": "error",
+    "folder": "text_secondary",
+    "more": "text_secondary",
+}
+BUTTON_ICONS = {
+    "update": "update",
+    "up": "up",
+    "down": "down",
+    "delete": "delete",
+    "folder": "folder",
+    "more": "more",
+}
 
 
 @dataclass(slots=True)
 class RowLayout:
+    card: QRect
     checkbox: QRect
     warning: QRect
     text: QRect
@@ -156,6 +180,14 @@ class RowLayout:
 
 
 ButtonPredicate = Callable[[Mod, str], bool]
+
+
+def _font(base: QFont, pixels: int, *, bold: bool = False, italic: bool = False) -> QFont:
+    font = QFont(base)
+    font.setPixelSize(pixels)
+    font.setWeight(QFont.Weight.DemiBold if bold else QFont.Weight.Normal)
+    font.setItalic(italic)
+    return font
 
 
 class ModDelegate(QStyledItemDelegate):
@@ -171,6 +203,7 @@ class ModDelegate(QStyledItemDelegate):
         self.palette = palette
         self.dark = dark
         self.button_enabled: ButtonPredicate = lambda _mod, _name: True
+        self._pressed: tuple[int, str] | None = None
 
     def set_theme(self, palette: Palette, dark: bool) -> None:
         self.palette, self.dark = palette, dark
@@ -180,23 +213,34 @@ class ModDelegate(QStyledItemDelegate):
         return QSize(400, ROW_HEIGHT)
 
     def layout(self, rect: QRect, mod: Mod) -> RowLayout:
-        cy = rect.center().y()
-        checkbox = QRect(rect.left() + 10, cy - 9, 18, 18)
-        warning = QRect(checkbox.right() + 6, cy - 9, 18, 18)
+        card = rect.adjusted(ROW_MARGIN_X, ROW_MARGIN_Y, -ROW_MARGIN_X, -ROW_MARGIN_Y)
+        cy = card.center().y()
+        checkbox = QRect(card.left() + PAD_X, cy - 9, 18, 18)
+        warning = QRect(checkbox.right() + 7, cy - 9, 18 if not mod.is_compatible else 0, 18)
         buttons: dict[str, QRect] = {}
-        x = rect.right() - 8
+        x = card.right() - PAD_X + 3
         for name in reversed(self.BUTTONS):
             if name == "update" and not mod.has_update:
                 continue
             x -= BUTTON_SIZE
             buttons[name] = QRect(x, cy - BUTTON_SIZE // 2, BUTTON_SIZE, BUTTON_SIZE)
             x -= BUTTON_GAP
-        version = QRect(x - VERSION_WIDTH, rect.top(), VERSION_WIDTH - 8, rect.height())
-        text_left = warning.right() + 6
-        text = QRect(text_left, rect.top() + 4, max(10, version.left() - text_left - 8), rect.height() - 8)
-        return RowLayout(checkbox, warning, text, version, buttons)
+        version = QRect(x - VERSION_WIDTH - 6, card.top(), VERSION_WIDTH, card.height())
+        text_left = (warning.right() if warning.width() else checkbox.right()) + 9
+        text = QRect(text_left, card.top() + 5, max(10, version.left() - text_left - 10), card.height() - 10)
+        return RowLayout(card, checkbox, warning, text, version, buttons)
 
     # ------------------------------------------------------------------ painting
+    def _background(self, mod: Mod, row: int, state: QStyle.StateFlag) -> QColor:
+        p = self.palette
+        if state & QStyle.StateFlag.State_Selected:
+            return QColor(p.selected)
+        if state & QStyle.StateFlag.State_MouseOver:
+            return QColor(p.row_hover)
+        if mod.highlight is not None:
+            return QColor(mod.highlight.for_theme(self.dark))
+        return QColor(p.row_even if row % 2 == 0 else p.row_odd)
+
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: ModelIndex) -> None:
         mod = index.data(MOD_ROLE)
         if not isinstance(mod, Mod):
@@ -204,71 +248,81 @@ class ModDelegate(QStyledItemDelegate):
         p = self.palette
         rect: QRect = option.rect  # type: ignore[attr-defined]
         state = option.state  # type: ignore[attr-defined]
+        base_font = QFont(option.font)  # type: ignore[attr-defined]
+        lay = self.layout(rect, mod)
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-        if state & QStyle.StateFlag.State_Selected:
-            background = QColor(p.selected)
-        elif mod.highlight is not None:
-            background = QColor(mod.highlight.for_theme(self.dark))
-        elif state & QStyle.StateFlag.State_MouseOver:
-            background = QColor(p.row_hover)
-        else:
-            background = QColor(p.row_even if index.row() % 2 == 0 else p.row_odd)
-        painter.fillRect(rect, background)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._background(mod, index.row(), state))
+        painter.drawRoundedRect(QRectF(lay.card), 4, 4)
 
-        lay = self.layout(rect, mod)
+        content_opacity = 1.0 if mod.is_enabled else DISABLED_OPACITY
+        painter.setOpacity(content_opacity)
         self._paint_checkbox(painter, lay.checkbox, mod.is_enabled)
         if not mod.is_compatible:
-            painter.setPen(QColor(p.warning))
-            font = QFont(option.font)  # type: ignore[attr-defined]
-            font.setPointSizeF(font.pointSizeF() + 2)
-            painter.setFont(font)
-            painter.drawText(lay.warning, Qt.AlignmentFlag.AlignCenter, "\u26a0")
+            icons.paint(painter, "warning_filled", lay.warning, p.warning, ICON_SIZE)
+        self._paint_text(painter, lay, mod, base_font)
 
-        base_font = QFont(option.font)  # type: ignore[attr-defined]
-        name_font = QFont(base_font)
-        name_font.setPointSizeF(base_font.pointSizeF() + 1)
-        name_font.setBold(mod.is_enabled)
+        version_font = _font(base_font, 12, italic=True)
+        painter.setFont(version_font)
+        painter.setPen(QColor(p.text_secondary))
+        painter.drawText(
+            lay.version,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            QFontMetrics(version_font).elidedText(
+                mod.version or "", Qt.TextElideMode.ElideLeft, lay.version.width()
+            ),
+        )
+        painter.setOpacity(1.0)
+        self._paint_buttons(painter, lay, mod, index.row(), bool(state & QStyle.StateFlag.State_Selected))
+
+        if mod.has_separator_after:
+            painter.setPen(QPen(QColor(p.separator), 1))
+            y = rect.bottom()
+            painter.drawLine(rect.left() + 6, y, rect.right() - 6, y)
+        painter.restore()
+
+    def _paint_text(self, painter: QPainter, lay: RowLayout, mod: Mod, base_font: QFont) -> None:
+        p = self.palette
+        name_font = _font(base_font, 14)
+        small = _font(base_font, 11)
+        badge_font = _font(base_font, 10)
         fm = QFontMetrics(name_font)
         has_subtitle = bool(mod.category_name)
-        name_rect = QRect(lay.text)
-        if has_subtitle:
-            name_rect.setHeight(lay.text.height() // 2 + 2)
-        painter.setFont(name_font)
-        painter.setPen(QColor(p.text if mod.is_enabled else p.text_secondary))
-        badge_width = 0
+        name_height = fm.height()
+        block = name_height + (QFontMetrics(small).height() + 1 if has_subtitle else 0)
+        top = lay.text.top() + (lay.text.height() - block) // 2
+        name_rect = QRect(lay.text.left(), top, lay.text.width(), name_height)
+
         badge_text = tr("WorkshopBadgeText")
-        small = QFont(base_font)
-        small.setPointSizeF(max(6.0, base_font.pointSizeF() - 1))
-        if mod.is_workshop_mod:
-            badge_width = QFontMetrics(small).horizontalAdvance(badge_text) + 14
-        flags = Qt.AlignmentFlag.AlignLeft | (
-            Qt.AlignmentFlag.AlignBottom if has_subtitle else Qt.AlignmentFlag.AlignVCenter
-        )
+        badge_fm = QFontMetrics(badge_font)
+        badge_width = badge_fm.horizontalAdvance(badge_text) + 12 if mod.is_workshop_mod else 0
         elided = fm.elidedText(
-            mod.name, Qt.TextElideMode.ElideRight, max(10, name_rect.width() - badge_width)
+            mod.name, Qt.TextElideMode.ElideRight, max(10, name_rect.width() - badge_width - 8)
         )
-        painter.drawText(name_rect, flags, elided)
+        painter.setFont(name_font)
+        painter.setPen(QColor(p.text if mod.is_enabled else p.text_disabled))
+        painter.drawText(name_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided)
+
         if mod.is_workshop_mod:
-            text_width = fm.horizontalAdvance(elided)
-            badge_height = QFontMetrics(small).height() + 2
-            top = (
-                name_rect.bottom() - badge_height - 1
-                if has_subtitle
-                else name_rect.center().y() - badge_height // 2
+            badge_height = badge_fm.height() + 4
+            badge = QRectF(
+                name_rect.left() + fm.horizontalAdvance(elided) + 8,
+                name_rect.center().y() - badge_height / 2 + 1,
+                badge_width,
+                badge_height,
             )
-            badge = QRect(name_rect.left() + text_width + 8, top, badge_width - 6, badge_height)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(p.primary))
-            painter.drawRoundedRect(badge, badge_height / 2, badge_height / 2)
-            painter.setPen(QColor("#FFFFFF"))
-            painter.setFont(small)
+            painter.setPen(QPen(QColor(p.separator), 1))
+            painter.setBrush(QColor(p.panel))
+            painter.drawRoundedRect(badge.adjusted(0.5, 0.5, -0.5, -0.5), badge_height / 2, badge_height / 2)
+            painter.setPen(QColor(p.text_secondary))
+            painter.setFont(badge_font)
             painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, badge_text)
+
         if has_subtitle:
-            sub_rect = QRect(
-                lay.text.left(), name_rect.bottom() + 2, lay.text.width(), lay.text.height() // 2
-            )
+            sub_rect = QRect(lay.text.left(), name_rect.bottom() + 1, lay.text.width(), lay.text.height())
             painter.setFont(small)
             painter.setPen(QColor(p.text_secondary))
             painter.drawText(
@@ -279,52 +333,34 @@ class ModDelegate(QStyledItemDelegate):
                 ),
             )
 
-        version_font = QFont(base_font)
-        version_font.setItalic(True)
-        painter.setFont(version_font)
-        painter.setPen(QColor(p.text_secondary))
-        version = mod.version or ""
-        painter.drawText(
-            lay.version,
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            QFontMetrics(version_font).elidedText(version, Qt.TextElideMode.ElideLeft, lay.version.width()),
-        )
-
+    def _paint_buttons(self, painter: QPainter, lay: RowLayout, mod: Mod, row: int, selected: bool) -> None:
+        p = self.palette
         cursor = self._view.viewport().mapFromGlobal(QCursor.pos())
         for name, button in lay.buttons.items():
             enabled = self.button_enabled(mod, name)
-            hovered = enabled and button.contains(cursor)
-            if hovered:
-                painter.setPen(QPen(QColor(p.primary), 1))
-                painter.setBrush(QColor(p.row_hover))
-                painter.drawRoundedRect(button, 4, 4)
-            color = QColor(p.text if enabled else p.text_disabled)
-            if name == "update":
-                color = QColor(p.success)
-            if name == "delete" and enabled and hovered:
-                color = QColor(p.error)
-            draw_icon(painter, name, button, color)
-
-        if mod.has_separator_after:
-            painter.setPen(QPen(QColor(p.primary), 2))
-            painter.drawLine(rect.left() + 6, rect.bottom() - 1, rect.right() - 6, rect.bottom() - 1)
-        else:
-            painter.setPen(QPen(QColor(p.separator), 1))
-            painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
-        painter.restore()
+            if enabled and button.contains(cursor):
+                fill = QColor(p.row_hover if selected else p.selected)
+                if self._pressed == (row, name):
+                    fill = fill.darker(112)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(fill)
+                painter.drawRoundedRect(QRectF(button), 4, 4)
+            color = str(getattr(p, BUTTON_COLORS[name]))
+            icons.paint(painter, BUTTON_ICONS[name], button, color, ICON_SIZE, 1.0 if enabled else 0.35)
 
     def _paint_checkbox(self, painter: QPainter, rect: QRect, checked: bool) -> None:
         p = self.palette
+        box = QRectF(rect).adjusted(0.75, 0.75, -0.75, -0.75)
         painter.setPen(QPen(QColor(p.primary if checked else p.input_border), 1.5))
         painter.setBrush(QColor(p.primary if checked else p.input_bg))
-        painter.drawRoundedRect(rect, 3, 3)
+        painter.drawRoundedRect(box, 3, 3)
         if checked:
-            painter.setPen(QPen(QColor("#FFFFFF"), 2.2, c=Qt.PenCapStyle.RoundCap))
-            path = QPainterPath()
-            path.moveTo(QPointF(rect.left() + 4, rect.center().y()))
-            path.lineTo(QPointF(rect.left() + 7.5, rect.bottom() - 4))
-            path.lineTo(QPointF(rect.right() - 3.5, rect.top() + 4.5))
+            painter.setPen(QPen(QColor("#FFFFFF"), 2, c=Qt.PenCapStyle.RoundCap, j=Qt.PenJoinStyle.RoundJoin))
             painter.setBrush(Qt.BrushStyle.NoBrush)
+            ox, oy = rect.left() + 1, rect.top() + 2
+            path = QPainterPath(QPointF(ox + 3, oy + 7))
+            path.lineTo(QPointF(ox + 7, oy + 11))
+            path.lineTo(QPointF(ox + 13, oy + 3))
             painter.drawPath(path)
 
     # ------------------------------------------------------------------ interaction
@@ -335,14 +371,23 @@ class ModDelegate(QStyledItemDelegate):
         if not isinstance(mod, Mod):
             return False
         if event.type() == QEvent.Type.MouseMove:
-            self._view.viewport().update(option.rect)  # type: ignore[attr-defined]
-            return False
-        if event.type() not in (QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick):
+            self._view.viewport().update()
             return False
         if not isinstance(event, QMouseEvent) or event.button() != Qt.MouseButton.LeftButton:
             return False
         pos = event.position().toPoint()
         lay = self.layout(option.rect, mod)  # type: ignore[attr-defined]
+        if event.type() == QEvent.Type.MouseButtonPress:
+            for name, button in lay.buttons.items():
+                if button.contains(pos) and self.button_enabled(mod, name):
+                    self._pressed = (index.row(), name)
+                    self._view.viewport().update(option.rect)  # type: ignore[attr-defined]
+                    return True
+            return False
+        if event.type() not in (QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick):
+            return False
+        self._pressed = None
+        self._view.viewport().update(option.rect)  # type: ignore[attr-defined]
         if lay.checkbox.adjusted(-4, -4, 4, 4).contains(pos):
             if event.type() == QEvent.Type.MouseButtonRelease:
                 self.toggled.emit(mod)
@@ -390,54 +435,3 @@ class ModDelegate(QStyledItemDelegate):
             return True
         QToolTip.hideText()
         return True
-
-
-def draw_icon(painter: QPainter, name: str, rect: QRect, color: QColor) -> None:
-    """Small vector glyphs so icons follow the theme colours on every platform."""
-    painter.save()
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    c = QPointF(rect.center())
-    s = rect.width() / 2 - 7
-    pen = QPen(color, 1.8, c=Qt.PenCapStyle.RoundCap, j=Qt.PenJoinStyle.RoundJoin)
-    painter.setPen(pen)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    path = QPainterPath()
-    if name == "up":
-        path.moveTo(c.x() - s, c.y() + s / 2)
-        path.lineTo(c.x(), c.y() - s / 2)
-        path.lineTo(c.x() + s, c.y() + s / 2)
-    elif name == "down":
-        path.moveTo(c.x() - s, c.y() - s / 2)
-        path.lineTo(c.x(), c.y() + s / 2)
-        path.lineTo(c.x() + s, c.y() - s / 2)
-    elif name == "delete":
-        path.moveTo(c.x() - s, c.y() - s)
-        path.lineTo(c.x() + s, c.y() + s)
-        path.moveTo(c.x() + s, c.y() - s)
-        path.lineTo(c.x() - s, c.y() + s)
-    elif name == "folder":
-        path.moveTo(c.x() - s - 1, c.y() + s)
-        path.lineTo(c.x() - s - 1, c.y() - s + 1)
-        path.lineTo(c.x() - 1, c.y() - s + 1)
-        path.lineTo(c.x() + 1, c.y() - s + 3)
-        path.lineTo(c.x() + s + 1, c.y() - s + 3)
-        path.lineTo(c.x() + s + 1, c.y() + s)
-        path.closeSubpath()
-    elif name == "more":
-        painter.setBrush(color)
-        painter.setPen(Qt.PenStyle.NoPen)
-        for dx in (-s, 0.0, s):
-            painter.drawEllipse(QPointF(c.x() + dx, c.y()), 1.8, 1.8)
-    elif name == "update":
-        painter.setBrush(color)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(c, s + 3, s + 3)
-        painter.setPen(QPen(QColor("#FFFFFF"), 1.8, c=Qt.PenCapStyle.RoundCap, j=Qt.PenJoinStyle.RoundJoin))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        path.moveTo(c.x(), c.y() - s + 1)
-        path.lineTo(c.x(), c.y() + s - 1)
-        path.moveTo(c.x() - s / 1.5, c.y() + 1)
-        path.lineTo(c.x(), c.y() + s - 1)
-        path.lineTo(c.x() + s / 1.5, c.y() + 1)
-    painter.drawPath(path)
-    painter.restore()
