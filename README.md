@@ -6,6 +6,10 @@ in Python + PySide6 and works with the same data (profiles, categories, notes, l
 
 ![Main window (light)](docs/screenshots/main-window-light.png)
 
+| Dark theme | Settings |
+| --- | --- |
+| ![Main window (dark)](docs/screenshots/main-window-dark.png) | ![Settings](docs/screenshots/settings-general-light.png) |
+
 ## Features
 
 - Detects both games (Steam libraries, GOG, common install paths, or a manually chosen
@@ -94,3 +98,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## License
 
 GPL-3.0-only, the same as the original project. See [LICENSE](LICENSE).
+
+The interface icons are from Microsoft's
+[Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons) (MIT, see
+[`src/kcd_mod_manager/resources/icons/LICENSE`](src/kcd_mod_manager/resources/icons/LICENSE)).

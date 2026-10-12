@@ -91,13 +91,68 @@ def main() -> int:
     window.refresh_view()
     app.processEvents()
 
+    from kcd_mod_manager.i18n import tr
+    from kcd_mod_manager.ui.dialogs import ConflictDialog, GameSelectionDialog, MessageDialog
+    from kcd_mod_manager.ui.settings_dialog import SettingsDialog, SettingsHooks
+
+    def save(widget: object, name: str, theme: str) -> None:
+        app.processEvents()
+        target = out / f"{name}-{theme}.png"
+        widget.grab().save(str(target))  # type: ignore[attr-defined]
+        print(target)
+
+    def show_and_save(widget: object, name: str, theme: str) -> None:
+        widget.show()  # type: ignore[attr-defined]
+        save(widget, name, theme)
+        widget.close()  # type: ignore[attr-defined]
+
+    hooks = SettingsHooks(
+        save=lambda: None,
+        theme_changed=lambda _d: None,
+        mod_order_changed=lambda _e: True,
+        set_executable=lambda g, p: ctx.session.set_manual_install(g, p),
+        ignored_mods=lambda: ctx.session.mods[:1],
+        unignore=lambda _m: None,
+        create_backup=lambda: None,
+        language_changed=lambda _l: None,
+        view_changed=lambda: None,
+        open_backups=lambda: None,
+    )
     for dark in (False, True):
+        theme = "dark" if dark else "light"
         ctx.settings.is_dark_mode = dark
         window.apply_theme()
-        app.processEvents()
-        target = out / f"main-window-{'dark' if dark else 'light'}.png"
-        window.grab().save(str(target))
-        print(target)
+        save(window, "main-window", theme)
+
+        settings = SettingsDialog(window, ctx.settings, dict(ctx.session.installs), hooks)
+        settings.show()
+        for page in ("general", "backups", "conflicts"):
+            settings.show_page(page)
+            save(settings, f"settings-{page}", theme)
+        settings.close()
+
+        show_and_save(
+            GameSelectionDialog(window, dict(ctx.session.installs), ctx.session.set_manual_install),
+            "game-selection",
+            theme,
+        )
+        names = {m.id: m.name for m in ctx.session.mods}
+        show_and_save(ConflictDialog(window, ctx.session.conflicts, names, set()), "conflicts", theme)
+        show_and_save(
+            MessageDialog(
+                window,
+                "question",
+                tr("DialogTitleQuestion"),
+                tr("DeleteProfileConfirm", "Default"),
+                ["YesButton", "NoButton"],
+            ),
+            "message",
+            theme,
+        )
+        menu = window._mod_menu(ctx.session.mods[0])
+        menu.popup(window.mapToGlobal(window.rect().center()))
+        save(menu, "context-menu", theme)
+        menu.close()
     window.close()
     session = ctx.session
     print(f"mods={len(session.mods)} conflicts={len(session.conflicts)} profile={session.selected_profile}")

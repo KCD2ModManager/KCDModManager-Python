@@ -76,7 +76,18 @@ def test_startup_loads_mods_profile_and_conflicts(window: MainWindow, game_root:
     assert window.enabled_label.text().endswith("/3")
     assert len(window.session.conflicts) == 1
     assert window.conflict_badge.text() == "1"
+    assert window.conflicts_box.isVisibleTo(window)
+    assert not window.category_row.isVisibleTo(window)
     window.list_view.viewport().grab()  # exercises the delegate painting
+
+
+def test_conflicts_button_only_shown_with_conflicts(window: MainWindow) -> None:
+    window.session.conflicts = []
+    window.refresh_view()
+    assert not window.conflicts_box.isVisibleTo(window)
+    window.session.create_category("Gameplay")
+    window.refresh_view()
+    assert window.category_row.isVisibleTo(window)
 
 
 def test_toggle_and_enable_all_persist_order_file(window: MainWindow, game_root: Path) -> None:
@@ -184,6 +195,28 @@ def test_settings_dialog_applies_changes(qtbot: QtBot, window: MainWindow, game_
     dialog.launch_args.editingFinished.emit()
     stored = window.ctx.session.settings_store.load()
     assert stored.is_dark_mode and stored.game_launch_args == "-devmode"
+
+
+def test_settings_pages_navigate(qtbot: QtBot, window: MainWindow) -> None:
+    dialog = SettingsDialog(window, window.settings, window.session.installs, hooks=window_hooks(window))
+    qtbot.addWidget(dialog)
+    assert len(dialog.page_titles()) == len(SettingsDialog.PAGES) == 6
+    dialog.show_page("backups")
+    assert dialog.pages.currentIndex() == 5
+    dialog.nav.setCurrentRow(1)
+    assert dialog.pages.currentIndex() == 1
+    assert set(dialog.toggles) >= {"is_dark_mode", "mod_order_enabled", "create_backup"}
+    dialog.grab()
+
+
+def test_mod_order_toggle_reverts_when_apply_fails(qtbot: QtBot, window: MainWindow) -> None:
+    hooks = window_hooks(window)
+    hooks.mod_order_changed = lambda _enabled: False
+    dialog = SettingsDialog(window, window.settings, window.session.installs, hooks=hooks)
+    qtbot.addWidget(dialog)
+    dialog.toggles["mod_order_enabled"].setChecked(False)
+    assert window.settings.mod_order_enabled
+    assert dialog.toggles["mod_order_enabled"].isChecked()
 
 
 def window_hooks(window: MainWindow):  # type: ignore[no-untyped-def]

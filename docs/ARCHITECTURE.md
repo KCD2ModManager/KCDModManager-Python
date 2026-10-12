@@ -37,6 +37,10 @@ future CLI) can use the same wiring.
 | `application/library.py` | loading mods, installing/updating/deleting, backups |
 | `ui/main_window.py` | main window, menus, row actions, startup flow |
 | `ui/mod_list.py` | `ModListModel` (drag & drop) and the painted `ModDelegate` |
+| `ui/theme.py` | light/dark palettes (values from the WPF theme dictionaries) and the QSS |
+| `ui/icons.py` | bundled Fluent UI System Icons (MIT, `resources/icons`) recoloured per theme |
+| `ui/widgets.py` | WPF-style controls: toggle switch, icon buttons, pills, search box, rounded menus |
+| `ui/settings_dialog.py`, `ui/dialogs.py` | settings window (sidebar pages) and the other dialogs |
 | `ui/tasks.py` | `TaskRunner` (serial pool for mutations, parallel pool for network/scans), `GuiInvoker` |
 | `i18n.py` | JSON translations converted from the original `.resx` files |
 
