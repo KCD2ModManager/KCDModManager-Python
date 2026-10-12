@@ -1,0 +1,66 @@
+# Reusable build: PyInstaller + self-test + platform packages. Called by ci.yml and release.yml.
+name: Build
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows
+            os: windows-latest
+            args: --installer
+          - label: linux
+            # Oldest supported runner -> lowest glibc requirement for the AppImage/tarball.
+            os: ubuntu-22.04
+            args: --appimage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libdbus-1-3 libglib2.0-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 file
+
+      - name: Install appimagetool
+        if: runner.os == 'Linux'
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
+
+      - name: Ensure Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Install dependencies
+        run: uv sync --locked --group build
+
+      - name: Build
+        run: uv run python scripts/build.py ${{ matrix.args }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.label }}
+          path: release/*
+          if-no-files-found: error

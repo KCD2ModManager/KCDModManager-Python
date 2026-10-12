@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=KCD Mod Manager
+GenericName=Mod Manager
+Comment=Manage mods for Kingdom Come: Deliverance I and II
+Exec=kcd-mod-manager
+Icon=kcd-mod-manager
+Terminal=false
+Categories=Game;Utility;
+Keywords=KCD;Kingdom Come;Deliverance;mods;Nexus;
+StartupWMClass=kcd-mod-manager

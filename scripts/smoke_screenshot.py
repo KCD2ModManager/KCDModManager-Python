@@ -99,9 +99,8 @@ def main() -> int:
         window.grab().save(str(target))
         print(target)
     window.close()
-    print(
-        f"mods={len(ctx.session.mods)} conflicts={len(ctx.session.conflicts)} profile={ctx.session.selected_profile}"
-    )
+    session = ctx.session
+    print(f"mods={len(session.mods)} conflicts={len(session.conflicts)} profile={session.selected_profile}")
     return 0
 
 

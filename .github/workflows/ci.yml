@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, types, tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libglib2.0-0
+
+      - name: Install dependencies
+        run: uv sync --locked --group dev
+
+      - name: Ruff (format)
+        run: uv run ruff format --check src tests scripts
+
+      - name: Ruff (lint)
+        run: uv run ruff check src tests scripts
+
+      - name: Pyright
+        run: uv run pyright
+
+      - name: Pytest
+        run: uv run pytest -q
+
+  build:
+    needs: checks
+    uses: ./.github/workflows/build.yml

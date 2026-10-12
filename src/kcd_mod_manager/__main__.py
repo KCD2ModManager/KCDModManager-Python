@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -21,7 +22,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--offline", action="store_true", help="Skip Nexus Mods and update checks at startup."
     )
+    parser.add_argument("--self-test", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--self-test-report", type=Path, help=argparse.SUPPRESS)
+    if sys.stdout is None:  # windowed (frozen) build: argparse output would fail
+        sys.stdout = sys.stderr = Path(os.devnull).open("w", encoding="utf-8")  # noqa: SIM115
     args = parser.parse_args(argv)
+
+    if args.self_test:
+        from kcd_mod_manager.selftest import run_self_test
+
+        return run_self_test(args.self_test_report)
 
     from kcd_mod_manager.ui.app import run
 

@@ -1,0 +1,36 @@
+# Push a tag like v5.0.0 to build both platforms and publish a GitHub release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l release
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "KCD Mod Manager ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            --verify-tag
