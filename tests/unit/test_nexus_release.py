@@ -50,6 +50,7 @@ class FakeNexus:
                 "mod_files": [
                     {"id": "file-uuid", "name": "Portable", "is_active": True},
                     {"id": "2438065", "name": "Installer", "is_active": True},
+                    {"id": "8145627", "name": "KCD Mod Manager 5.0.0 (Linux)", "is_active": True},
                 ]
             },
             ("POST", "/uploads/multipart"): {
@@ -95,7 +96,7 @@ def test_create_file_uploads_in_parts_and_reports_website_id(tmp_path: Path) -> 
     result = nexus.Client(KEY, fake, poll_seconds=0).create_file(
         "mod-uuid", archive, "KCD Mod Manager 5.0.0 (Linux)", "5.0.0", "Linux build"
     )
-    assert result == {"file_id": "new-file", "file_version_website_id": "999001"}
+    assert result == {"file_id": "9869834856608", "file_version_website_id": "8145627"}
     assert fake.parts == [b"1234", b"5678"]
     create = next(payload for method, path, payload in fake.calls if path == "/mod-files")
     assert create is not None

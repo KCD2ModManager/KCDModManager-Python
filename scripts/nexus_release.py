@@ -90,9 +90,6 @@ class Client:
             raise NexusError(f"file {value} does not belong to this mod")
         return file_id
 
-    def file_versions(self, file_id: str) -> list[dict[str, Any]]:
-        return list(self._api("GET", f"/mod-files/{file_id}/versions")["versions"])
-
     # ------------------------------------------------------------------ upload
     def upload(self, path: Path) -> str:
         """Multipart upload (same flow as Nexus-Mods/upload-action); returns the upload ID once available."""
@@ -156,10 +153,11 @@ class Client:
                 "update_mod_version": False,
             },
         )
-        file_id = str(created["id"])
-        versions = self.file_versions(file_id)
-        website_id = str(versions[-1]["game_scoped_id"]) if versions else ""
-        return {"file_id": file_id, "file_version_website_id": website_id}
+        # The ID in this response differs from the one /mods/{id}/files (and resolve) uses, so look the
+        # new file up by name there.
+        listed = [f for f in self.mod_files(mod_id) if f["name"] == name]
+        website_id = str(listed[-1]["id"]) if listed else str(created.get("game_scoped_id", ""))
+        return {"file_id": str(created["id"]), "file_version_website_id": website_id}
 
 
 def _emit(values: dict[str, str]) -> None:
