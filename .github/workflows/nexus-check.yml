@@ -28,6 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: List files of the mod page
+        run: python3 scripts/nexus_release.py files --game "${{ matrix.game }}" --mod "${{ matrix.mod }}"
+
       - name: Resolve IDs
         run: |
           python3 scripts/nexus_release.py resolve --game "${{ matrix.game }}" --mod "${{ matrix.mod }}"

@@ -76,9 +76,19 @@ class Client:
     def mod_id(self, game: str, game_scoped_id: str) -> str:
         return str(self._api("GET", f"/games/{game}/mods/{game_scoped_id}")["id"])
 
-    def file_id(self, game: str, version_game_scoped_id: str) -> str:
-        version = self._api("GET", f"/games/{game}/mod-file-versions/{version_game_scoped_id}")
-        return str(version["file"]["id"])
+    def mod_files(self, mod_id: str) -> list[dict[str, Any]]:
+        return list(self._api("GET", f"/mods/{mod_id}/files")["mod_files"])
+
+    def file_id(self, game: str, mod_id: str, value: str) -> str:
+        """``value`` is either a file ID (as shown under "Advanced") or a version's website file ID."""
+        files = self.mod_files(mod_id)
+        if any(str(f["id"]) == value for f in files):
+            return value
+        version = self._api("GET", f"/games/{game}/mod-file-versions/{value}")
+        file_id = str(version["file"]["id"])
+        if not any(str(f["id"]) == file_id for f in files):
+            raise NexusError(f"file {value} does not belong to this mod")
+        return file_id
 
     def file_versions(self, file_id: str) -> list[dict[str, Any]]:
         return list(self._api("GET", f"/mod-files/{file_id}/versions")["versions"])
@@ -167,7 +177,12 @@ def main(argv: list[str] | None = None) -> int:
     resolve = commands.add_parser("resolve")
     resolve.add_argument("--game", required=True, help="game domain, e.g. kingdomcomedeliverance2")
     resolve.add_argument("--mod", required=True, help="mod ID from the mod page URL")
-    resolve.add_argument("--file-version", default="", help="file ID shown in the Files tab")
+    resolve.add_argument(
+        "--file-version", default="", help="file ID (Files tab, Advanced) or version file ID"
+    )
+    files = commands.add_parser("files", help="list the files of a mod page")
+    files.add_argument("--game", required=True)
+    files.add_argument("--mod", required=True)
     create = commands.add_parser("create-file")
     create.add_argument("--mod-id", required=True, help="v3 mod ID (from resolve)")
     create.add_argument("--path", type=Path, required=True)
@@ -182,8 +197,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "resolve":
             values = {"mod_id": client.mod_id(args.game, args.mod)}
             if args.file_version:
-                values["file_id"] = client.file_id(args.game, args.file_version)
+                values["file_id"] = client.file_id(args.game, values["mod_id"], args.file_version)
             _emit(values)
+        elif args.command == "files":
+            mod_id = client.mod_id(args.game, args.mod)
+            for f in client.mod_files(mod_id):
+                state = "active" if f.get("is_active") else "inactive"
+                print(f"{f['id']}  {state:8}  versions={f.get('versions_count')}  {f['name']}")
         else:
             _emit(
                 client.create_file(

@@ -42,6 +42,16 @@ class FakeNexus:
                 "id": "ver-uuid",
                 "file": {"id": "file-uuid", "name": "Portable"},
             },
+            ("GET", "/games/kingdomcomedeliverance2/mod-file-versions/555"): {
+                "id": "other-ver",
+                "file": {"id": "foreign-file", "name": "Someone else's"},
+            },
+            ("GET", "/mods/mod-uuid/files"): {
+                "mod_files": [
+                    {"id": "file-uuid", "name": "Portable", "is_active": True},
+                    {"id": "2438065", "name": "Installer", "is_active": True},
+                ]
+            },
             ("POST", "/uploads/multipart"): {
                 "id": "upload-uuid",
                 "part_size_bytes": 4,
@@ -70,7 +80,12 @@ class FakeNexus:
 def test_resolve_maps_website_ids_to_v3_ids() -> None:
     client = nexus.Client(KEY, FakeNexus())
     assert client.mod_id("kingdomcomedeliverance2", "187") == "mod-uuid"
-    assert client.file_id("kingdomcomedeliverance2", "936370") == "file-uuid"
+    # website ID of a version -> its file
+    assert client.file_id("kingdomcomedeliverance2", "mod-uuid", "936370") == "file-uuid"
+    # file ID as shown under "Advanced" is used as is
+    assert client.file_id("kingdomcomedeliverance2", "mod-uuid", "2438065") == "2438065"
+    with pytest.raises(nexus.NexusError, match="does not belong"):
+        client.file_id("kingdomcomedeliverance2", "mod-uuid", "555")
 
 
 def test_create_file_uploads_in_parts_and_reports_website_id(tmp_path: Path) -> None:
