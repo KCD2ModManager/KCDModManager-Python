@@ -45,7 +45,7 @@ def test_section_returns_only_the_requested_version() -> None:
 
 def test_plain_strips_markdown() -> None:
     text = changelog.plain(changelog.section(SAMPLE, "1.2.0"))
-    assert text == "Added:\n\n- Bold feature with code and a link\n- star bullet\n\nFixed:\n\n- a bug"
+    assert text == "Bold feature with code and a link\nstar bullet\na bug"
 
 
 def test_current_version_has_a_changelog_entry() -> None:

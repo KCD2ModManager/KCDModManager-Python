@@ -37,19 +37,15 @@ def section(text: str, version: str) -> str:
 
 
 def plain(markdown: str) -> str:
-    """Markdown without links, emphasis or code marks; ``### Added`` becomes ``Added:``."""
+    """Nexus Mods style: one entry per line, without bullets, headings, links or emphasis."""
     out: list[str] = []
     for line in markdown.splitlines():
         line = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", line)
         line = re.sub(r"(\*\*|__|`)", "", line)
-        line = re.sub(r"^\s*[*+] ", "- ", line)
-        heading = re.match(r"^#{3,6}\s+(.*)$", line)
-        if heading:
-            if out and out[-1]:
-                out.append("")
-            line = f"{heading.group(1).strip()}:"
-        out.append(line.rstrip())
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+        line = re.sub(r"^\s*[-*+]\s+", "", line).strip()
+        if line and not line.startswith("#"):
+            out.append(line)
+    return "\n".join(out)
 
 
 def app_version() -> str:
