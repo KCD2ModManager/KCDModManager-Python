@@ -93,19 +93,39 @@ Packaging choices:
 
 ### Publishing to Nexus Mods
 
-Pushing a release tag (for example `v5.0.1`) builds both platforms, creates the GitHub release
-and then uploads the Windows portable ZIP as a new version of the main file on both the KCD1 and
-the KCD2 mod page, archiving the previous version. It uses the official
-[Nexus-Mods/upload-action](https://github.com/Nexus-Mods/upload-action). Tags containing `-`
+To release:
+
+1. Bump `__version__` in `src/kcd_mod_manager/__init__.py` and `version` in `pyproject.toml`.
+2. Move the `## [Unreleased]` notes in `CHANGELOG.md` under a new `## [X.Y.Z]` heading.
+3. Commit, then push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
+The release workflow first checks that the tag matches `__version__` and that `CHANGELOG.md` has a
+non-empty section for it; otherwise nothing is built or published. It then builds both platforms,
+creates the GitHub release with that section as release notes, and uploads three files to each of
+the KCD1 and KCD2 mod pages with the official
+[Nexus-Mods/upload-action](https://github.com/Nexus-Mods/upload-action):
+
+| Nexus file | Uploaded archive |
+| --- | --- |
+| Portable | `KCDModManager-X.Y.Z-windows-x64-portable.zip` |
+| Installer | the setup `.exe`, zipped |
+| Linux | AppImage and tarball, zipped together |
+
+Every upload archives the previous version of that file. The portable upload also adds the
+changelog section (as plain text) to the mod page and sets the page's version. Tags containing `-`
 (such as `v5.1.0-rc1`) are released on GitHub only.
 
-One-time setup in the GitHub repository settings (Secrets and variables, then Actions):
+One-time setup in the GitHub repository settings (Secrets and variables, then Actions). File and
+mod IDs are shown in the Files tab of a mod page under "Advanced"; the action can only add versions
+to existing files, so upload the first Linux build of each page by hand.
 
 | Kind | Name | Value |
 | --- | --- | --- |
 | Secret | `NEXUSMODS_API_KEY` | API key from <https://www.nexusmods.com/settings/api-keys> |
-| Variable | `NEXUSMODS_FILE_ID_KCD1` | File ID of the main file on the KCD1 mod page |
-| Variable | `NEXUSMODS_FILE_ID_KCD2` | File ID of the main file on the KCD2 mod page |
+| Variable | `NEXUSMODS_MOD_ID_KCD1`, `NEXUSMODS_MOD_ID_KCD2` | mod ID of each page |
+| Variable | `NEXUSMODS_FILE_ID_KCD1_PORTABLE`, `NEXUSMODS_FILE_ID_KCD2_PORTABLE` | portable file |
+| Variable | `NEXUSMODS_FILE_ID_KCD1_INSTALLER`, `NEXUSMODS_FILE_ID_KCD2_INSTALLER` | installer file |
+| Variable | `NEXUSMODS_FILE_ID_KCD1_LINUX`, `NEXUSMODS_FILE_ID_KCD2_LINUX` | Linux file |
 
 If the secret or a file ID is missing, that upload is skipped with a warning instead of failing
 the release. The key is only read from the secret and is never written to logs or artifacts.

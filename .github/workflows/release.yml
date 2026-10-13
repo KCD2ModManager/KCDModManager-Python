@@ -1,4 +1,5 @@
-# Push a tag like v5.0.0 to build both platforms and publish a GitHub release.
+# Push a tag like v5.0.1 to build both platforms, publish a GitHub release and upload the builds
+# to the KCD1 and KCD2 Nexus Mods pages. Release notes come from the matching CHANGELOG.md section.
 name: Release
 
 on:
@@ -9,11 +10,34 @@ permissions:
   contents: read
 
 jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.notes.outputs.version }}
+      nexus_changelog: ${{ steps.notes.outputs.nexus_changelog }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract release notes
+        id: notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python3 scripts/changelog.py "$version" --notes release-notes.md --plain nexus-changelog.txt
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          delimiter="EOF_$(openssl rand -hex 8)"
+          { echo "nexus_changelog<<$delimiter"; cat nexus-changelog.txt; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+
   build:
+    needs: changelog
     uses: ./.github/workflows/build.yml
 
   publish:
-    needs: build
+    needs: [changelog, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -24,6 +48,10 @@ jobs:
           path: release
           merge-multiple: true
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -31,13 +59,13 @@ jobs:
           ls -l release
           gh release create "$GITHUB_REF_NAME" release/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "KCD Mod Manager ${GITHUB_REF_NAME#v}" \
-            --generate-notes \
+            --title "KCD Mod Manager ${{ needs.changelog.outputs.version }}" \
+            --notes-file release-notes.md \
             --verify-tag
 
   nexus:
-    name: Nexus Mods (${{ matrix.page }})
-    needs: publish
+    name: Nexus Mods (${{ matrix.page }} ${{ matrix.variant }})
+    needs: [changelog, publish]
     # Pre-release tags (v5.1.0-rc1) stay on GitHub only.
     if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
@@ -45,38 +73,68 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - page: KCD1
-            file_id: ${{ vars.NEXUSMODS_FILE_ID_KCD1 }}
-          - page: KCD2
-            file_id: ${{ vars.NEXUSMODS_FILE_ID_KCD2 }}
+          # The portable upload of each page also adds the changelog and bumps the page version.
+          - { page: KCD1, variant: portable, file_id: "${{ vars.NEXUSMODS_FILE_ID_KCD1_PORTABLE }}", mod_id: "${{ vars.NEXUSMODS_MOD_ID_KCD1 }}" }
+          - { page: KCD1, variant: installer, file_id: "${{ vars.NEXUSMODS_FILE_ID_KCD1_INSTALLER }}" }
+          - { page: KCD1, variant: linux, file_id: "${{ vars.NEXUSMODS_FILE_ID_KCD1_LINUX }}" }
+          - { page: KCD2, variant: portable, file_id: "${{ vars.NEXUSMODS_FILE_ID_KCD2_PORTABLE }}", mod_id: "${{ vars.NEXUSMODS_MOD_ID_KCD2 }}" }
+          - { page: KCD2, variant: installer, file_id: "${{ vars.NEXUSMODS_FILE_ID_KCD2_INSTALLER }}" }
+          - { page: KCD2, variant: linux, file_id: "${{ vars.NEXUSMODS_FILE_ID_KCD2_LINUX }}" }
+    env:
+      VERSION: ${{ needs.changelog.outputs.version }}
     steps:
       - name: Check configuration
         id: config
         env:
           API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
           FILE_ID: ${{ matrix.file_id }}
+          MOD_ID: ${{ matrix.mod_id }}
         run: |
           if [ -z "$API_KEY" ] || [ -z "$FILE_ID" ]; then
-            echo "::warning::Skipping ${{ matrix.page }}: NEXUSMODS_API_KEY secret or file ID variable is not set."
+            echo "::warning::Skipping ${{ matrix.page }} ${{ matrix.variant }}: NEXUSMODS_API_KEY or its file ID variable is not set."
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          if [ "${{ matrix.variant }}" = "portable" ] && [ -z "$MOD_ID" ]; then
+            echo "::warning::${{ matrix.page }}: NEXUSMODS_MOD_ID_${{ matrix.page }} is not set, so no changelog is added and the page version is not updated."
+          fi
 
       - uses: actions/download-artifact@v4
         if: steps.config.outputs.enabled == 'true'
         with:
-          name: release-windows
+          name: ${{ matrix.variant == 'linux' && 'release-linux' || 'release-windows' }}
           path: release
 
-      - name: Locate portable zip
-        id: zip
+      - name: Package
+        id: package
         if: steps.config.outputs.enabled == 'true'
+        working-directory: release
         run: |
-          file="release/KCDModManager-${{ steps.config.outputs.version }}-windows-x64-portable.zip"
-          test -f "$file" || { echo "::error::$file not found"; ls -l release; exit 1; }
-          echo "path=$file" >> "$GITHUB_OUTPUT"
+          base="KCDModManager-$VERSION"
+          case "${{ matrix.variant }}" in
+            portable)
+              zip="$base-windows-x64-portable.zip"
+              display="KCD Mod Manager $VERSION (Portable)"
+              description="Portable Windows build. Unzip anywhere and run KCDModManager.exe." ;;
+            installer)
+              zip="$base-windows-x64-setup.zip"
+              zip -j "$zip" "$base-windows-x64-setup.exe"
+              display="KCD Mod Manager $VERSION (Installer)"
+              description="Windows installer. Installs per user, no admin rights needed." ;;
+            linux)
+              zip="$base-linux-x86_64.zip"
+              chmod +x "$base-x86_64.AppImage"
+              zip -j "$zip" "$base-x86_64.AppImage" "$base-linux-x86_64.tar.gz"
+              display="KCD Mod Manager $VERSION (Linux)"
+              description="Linux build: AppImage (single file) and tarball (for systems without FUSE)." ;;
+          esac
+          test -f "$zip" || { echo "::error::$zip not found"; ls -l; exit 1; }
+          {
+            echo "path=release/$zip"
+            echo "display=$display"
+            echo "description=$description"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload to Nexus Mods
         if: steps.config.outputs.enabled == 'true'
@@ -85,9 +143,12 @@ jobs:
         with:
           api_key: ${{ secrets.NEXUSMODS_API_KEY }}
           file_id: ${{ matrix.file_id }}
-          filename: ${{ steps.zip.outputs.path }}
-          version: ${{ steps.config.outputs.version }}
-          display_name: KCD Mod Manager ${{ steps.config.outputs.version }}
-          description: Portable Windows build. Release notes are on GitHub.
+          filename: ${{ steps.package.outputs.path }}
+          version: ${{ env.VERSION }}
+          display_name: ${{ steps.package.outputs.display }}
+          description: ${{ steps.package.outputs.description }}
           category: main
           archive_existing_version: "true"
+          mod_id: ${{ matrix.mod_id }}
+          changelog: ${{ matrix.mod_id && needs.changelog.outputs.nexus_changelog || '' }}
+          update_mod_version: ${{ matrix.mod_id && 'true' || 'false' }}
