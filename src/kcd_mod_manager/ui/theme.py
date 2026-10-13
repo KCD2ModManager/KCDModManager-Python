@@ -9,7 +9,18 @@ from PySide6.QtWidgets import QApplication
 
 from kcd_mod_manager.ui import icons
 
-FONT_FAMILIES = ["Segoe UI", "Cantarell", "Noto Sans", "Ubuntu", "DejaVu Sans", "sans-serif"]
+FONT_FAMILIES = [
+    "Segoe UI",
+    "Cantarell",
+    "Noto Sans",
+    "Ubuntu",
+    "DejaVu Sans",
+    "Microsoft YaHei UI",
+    "Noto Sans CJK SC",
+    "Source Han Sans SC",
+    "WenQuanYi Micro Hei",
+    "sans-serif",
+]
 
 
 @dataclass(frozen=True, slots=True)

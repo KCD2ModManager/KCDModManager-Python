@@ -7,7 +7,7 @@ from typing import Any
 
 from kcd_mod_manager.domain.models import GameType
 
-SUPPORTED_LANGUAGES = ("en", "de", "fr")
+SUPPORTED_LANGUAGES = ("en", "de", "fr", "zh")
 
 
 @dataclass(slots=True)

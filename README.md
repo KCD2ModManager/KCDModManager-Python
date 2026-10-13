@@ -23,7 +23,8 @@ in Python + PySide6 and works with the same data (profiles, categories, notes, l
 - Nexus Mods: SSO login, update checks, premium one-click updates, endorse, open mod page.
 - Steam Workshop mods are listed and can be ordered, but their files are never modified.
 - Mods backups (on startup or on demand, with automatic pruning), and a game manifest `gameVersion` updater.
-- Light/dark theme; English, German and French.
+- Light/dark theme; English, German, French and Simplified Chinese. The first start picks the
+  system language when it is supported.
 
 ## Install
 
@@ -61,10 +62,18 @@ uv run ruff check src tests scripts
 uv run pyright
 uv run pytest -q                  # headless (QT_QPA_PLATFORM=offscreen), temp dirs only
 uv run python scripts/smoke_screenshot.py out/   # renders the UI against a fake game
+uv run python scripts/smoke_screenshot.py out/ zh   # same, in another language
 ```
 
 Tests never touch real user data or a real game installation. `tests/conftest.py` redirects
 `KCDMM_DATA_DIR`, `APPDATA`, `LOCALAPPDATA` and `XDG_CONFIG_HOME` to temporary folders.
+
+On Windows the offscreen platform only finds fonts with `QT_QPA_FONTDIR=C:\Windows\Fonts`, and
+even then misses the Chinese faces inside `.ttc` files. For screenshots of the Chinese UI, set
+`QT_QPA_PLATFORM=windows` (the windows flash briefly on screen).
+
+The app icon is drawn in `packaging/icon/logo.svg`. After editing it, run
+`uv run python scripts/make_icon.py` to regenerate `logo.ico` and the Linux PNG.
 
 ## Build
 

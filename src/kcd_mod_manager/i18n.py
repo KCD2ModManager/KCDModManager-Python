@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable
 from pathlib import Path
 
 from kcd_mod_manager.application.settings import SUPPORTED_LANGUAGES
@@ -15,7 +16,16 @@ from kcd_mod_manager.resources import resource_path
 
 log = logging.getLogger(__name__)
 
-LANGUAGE_NAMES = {"en": "English", "de": "Deutsch", "fr": "Français"}
+LANGUAGE_NAMES = {"en": "English", "de": "Deutsch", "fr": "Français", "zh": "简体中文"}
+
+
+def detect_language(locales: Iterable[str]) -> str:
+    """First supported language in a preference list of BCP 47 tags (``de-DE``, ``zh-Hans-CN``)."""
+    for tag in locales:
+        code = tag.replace("_", "-").split("-", 1)[0].lower()
+        if code in SUPPORTED_LANGUAGES:
+            return code
+    return "en"
 
 
 def _load(language: str, directory: Path) -> dict[str, str]:

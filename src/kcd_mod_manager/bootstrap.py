@@ -46,15 +46,18 @@ class AppContext:
 
 
 def load_settings(
-    paths: AppPaths, credentials: CredentialStore
+    paths: AppPaths, credentials: CredentialStore, system_language: str = "en"
 ) -> tuple[SettingsStore, AppSettings, bool, bool]:
-    """Load settings; on first run import them (read-only) from the original WPF manager."""
+    """Load settings; on first run import them (read-only) from the original WPF manager.
+
+    Without a WPF configuration, a first run starts in ``system_language``.
+    """
     store = SettingsStore(paths.settings_file)
     if store.exists():
         return store, store.load(), False, False
     legacy = import_legacy_settings()
     if legacy is None:
-        settings = AppSettings()
+        settings = AppSettings(language=system_language)
         store.save(settings)
         return store, settings, True, False
     settings = legacy.settings
@@ -71,11 +74,12 @@ def build_context(
     paths: AppPaths | None = None,
     credentials: CredentialStore | None = None,
     retry_prompt: RetryPrompt | None = None,
+    system_language: str = "en",
 ) -> AppContext:
     paths = paths or AppPaths.default()
     paths.ensure()
     credentials = credentials or KeyringCredentialStore(FileCredentialStore(paths.data_dir / "nexus_api_key"))
-    settings_store, settings, first_run, imported = load_settings(paths, credentials)
+    settings_store, settings, first_run, imported = load_settings(paths, credentials, system_language)
 
     order_files = OrderFileManager(paths.safety_dir, retry_prompt)
     nexus_client = NexusClient(credentials.get)

@@ -4,6 +4,7 @@ Uses only temporary directories (never the real data folder or a real game insta
 safe to run on a developer machine or in CI:
 
     uv run python scripts/smoke_screenshot.py out/
+    uv run python scripts/smoke_screenshot.py out-zh/ zh    # in another language
 """
 
 from __future__ import annotations
@@ -64,14 +65,19 @@ def main() -> int:
     from kcd_mod_manager.bootstrap import build_context
     from kcd_mod_manager.domain.highlight import PRESETS
     from kcd_mod_manager.domain.models import GameType
+    from kcd_mod_manager.i18n import set_language
     from kcd_mod_manager.infrastructure.app_paths import AppPaths
     from kcd_mod_manager.infrastructure.credentials import MemoryCredentialStore
     from kcd_mod_manager.infrastructure.game_detection import GameDetector
     from kcd_mod_manager.ui.main_window import MainWindow
 
-    app = QApplication(sys.argv)
+    app = QApplication(sys.argv[:1])
     game = make_fake_game(temp / "library")
-    ctx = build_context(AppPaths(temp / "data"), credentials=MemoryCredentialStore())
+    language = sys.argv[2] if len(sys.argv) > 2 else "en"
+    ctx = build_context(
+        AppPaths(temp / "data"), credentials=MemoryCredentialStore(), system_language=language
+    )
+    set_language(language)
     ctx.session.detector = GameDetector(lambda: [], lambda: [], lambda _g: [])
     ctx.settings.set_game_path(GameType.KCD2, str(game))
     ctx.settings.window_geometry = ""

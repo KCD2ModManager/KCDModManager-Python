@@ -27,6 +27,7 @@ def run_self_test(report: Path | None = None) -> int:
     from PySide6.QtWidgets import QApplication
 
     from kcd_mod_manager import __version__
+    from kcd_mod_manager.application.settings import SUPPORTED_LANGUAGES
     from kcd_mod_manager.i18n import Translator
     from kcd_mod_manager.resources import resource_path
 
@@ -40,7 +41,7 @@ def run_self_test(report: Path | None = None) -> int:
 
     def translations() -> str:
         counts = []
-        for language in ("en", "de", "fr"):
+        for language in SUPPORTED_LANGUAGES:
             t = Translator(language)
             if t("ButtonStartGame") == "ButtonStartGame":
                 raise RuntimeError(f"{language} translations missing")

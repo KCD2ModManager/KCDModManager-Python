@@ -9,13 +9,13 @@ import traceback
 from pathlib import Path
 from types import TracebackType
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QLocale, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from kcd_mod_manager import APP_NAME, __version__
 from kcd_mod_manager.bootstrap import build_context
-from kcd_mod_manager.i18n import set_language, tr
+from kcd_mod_manager.i18n import detect_language, set_language, tr
 from kcd_mod_manager.infrastructure.app_paths import AppPaths
 from kcd_mod_manager.infrastructure.logging_setup import configure_logging
 from kcd_mod_manager.resources import resource_path
@@ -59,8 +59,9 @@ def run(data_dir: Path | None = None, online: bool = True) -> int:
 
     from kcd_mod_manager.ui.main_window import MainWindow
 
+    system_language = detect_language(QLocale.system().uiLanguages())
     try:
-        ctx = build_context(paths)
+        ctx = build_context(paths, system_language=system_language)
     except Exception as exc:
         log.exception("Initialization failed")
         QMessageBox.critical(None, tr("DialogTitleError"), tr("ErrorInitialization", exc))
