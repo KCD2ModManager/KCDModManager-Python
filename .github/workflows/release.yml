@@ -1,4 +1,4 @@
-# Push a tag like v5.0.1 to build both platforms, publish a GitHub release and upload the builds
+﻿# Push a tag like v5.0.1 to build both platforms, publish a GitHub release and upload the builds
 # to the KCD1 and KCD2 Nexus Mods pages. Release notes come from the matching CHANGELOG.md section.
 name: Release
 
@@ -29,7 +29,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: release-notes
+          name: notes
           path: release-notes.md
 
   build:
@@ -50,7 +50,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: release-notes
+          name: notes
 
       - name: Create GitHub release
         env:
@@ -72,43 +72,82 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # IDs are the numbers shown on the website (mod page URL, "File ID" in the Files tab);
+        # scripts/nexus_release.py translates them to the v3 IDs the upload endpoints need.
+        # The portable upload of each page also adds the changelog and bumps the page version.
         include:
-          # The portable upload of each page also adds the changelog and bumps the page version.
-          - { page: KCD1, variant: portable, file_id: "${{ vars.NEXUSMODS_FILE_ID_KCD1_PORTABLE }}", mod_id: "${{ vars.NEXUSMODS_MOD_ID_KCD1 }}" }
-          - { page: KCD1, variant: installer, file_id: "${{ vars.NEXUSMODS_FILE_ID_KCD1_INSTALLER }}" }
-          - { page: KCD1, variant: linux, file_id: "${{ vars.NEXUSMODS_FILE_ID_KCD1_LINUX }}" }
-          - { page: KCD2, variant: portable, file_id: "${{ vars.NEXUSMODS_FILE_ID_KCD2_PORTABLE }}", mod_id: "${{ vars.NEXUSMODS_MOD_ID_KCD2 }}" }
-          - { page: KCD2, variant: installer, file_id: "${{ vars.NEXUSMODS_FILE_ID_KCD2_INSTALLER }}" }
-          - { page: KCD2, variant: linux, file_id: "${{ vars.NEXUSMODS_FILE_ID_KCD2_LINUX }}" }
+          - page: KCD1
+            game: kingdomcomedeliverance
+            mod: ${{ vars.NEXUSMODS_MOD_ID_KCD1 }}
+            variant: portable
+            file: ${{ vars.NEXUSMODS_FILE_ID_KCD1_PORTABLE }}
+            changelog: true
+          - page: KCD1
+            game: kingdomcomedeliverance
+            mod: ${{ vars.NEXUSMODS_MOD_ID_KCD1 }}
+            variant: installer
+            file: ${{ vars.NEXUSMODS_FILE_ID_KCD1_INSTALLER }}
+            changelog: false
+          - page: KCD1
+            game: kingdomcomedeliverance
+            mod: ${{ vars.NEXUSMODS_MOD_ID_KCD1 }}
+            variant: linux
+            file: ${{ vars.NEXUSMODS_FILE_ID_KCD1_LINUX }}
+            changelog: false
+          - page: KCD2
+            game: kingdomcomedeliverance2
+            mod: ${{ vars.NEXUSMODS_MOD_ID_KCD2 }}
+            variant: portable
+            file: ${{ vars.NEXUSMODS_FILE_ID_KCD2_PORTABLE }}
+            changelog: true
+          - page: KCD2
+            game: kingdomcomedeliverance2
+            mod: ${{ vars.NEXUSMODS_MOD_ID_KCD2 }}
+            variant: installer
+            file: ${{ vars.NEXUSMODS_FILE_ID_KCD2_INSTALLER }}
+            changelog: false
+          - page: KCD2
+            game: kingdomcomedeliverance2
+            mod: ${{ vars.NEXUSMODS_MOD_ID_KCD2 }}
+            variant: linux
+            file: ${{ vars.NEXUSMODS_FILE_ID_KCD2_LINUX }}
+            changelog: false
     env:
       VERSION: ${{ needs.changelog.outputs.version }}
+      NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
     steps:
-      - name: Check configuration
-        id: config
-        env:
-          API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
-          FILE_ID: ${{ matrix.file_id }}
-          MOD_ID: ${{ matrix.mod_id }}
+      - name: Decide what to do
+        id: mode
         run: |
-          if [ -z "$API_KEY" ] || [ -z "$FILE_ID" ]; then
-            echo "::warning::Skipping ${{ matrix.page }} ${{ matrix.variant }}: NEXUSMODS_API_KEY or its file ID variable is not set."
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "enabled=true" >> "$GITHUB_OUTPUT"
-          if [ "${{ matrix.variant }}" = "portable" ] && [ -z "$MOD_ID" ]; then
-            echo "::warning::${{ matrix.page }}: NEXUSMODS_MOD_ID_${{ matrix.page }} is not set, so no changelog is added and the page version is not updated."
+          if [ -z "$NEXUSMODS_API_KEY" ] || [ -z "${{ matrix.mod }}" ]; then
+            echo "::warning::Skipping ${{ matrix.page }} ${{ matrix.variant }}: NEXUSMODS_API_KEY or NEXUSMODS_MOD_ID_${{ matrix.page }} is not set."
+            echo "mode=skip" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ matrix.file }}" ]; then
+            echo "mode=update" >> "$GITHUB_OUTPUT"
+          elif [ "${{ matrix.variant }}" = "linux" ]; then
+            echo "mode=create" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Skipping ${{ matrix.page }} ${{ matrix.variant }}: its file ID variable is not set."
+            echo "mode=skip" >> "$GITHUB_OUTPUT"
           fi
 
+      - uses: actions/checkout@v4
+        if: steps.mode.outputs.mode != 'skip'
+
+      - name: Resolve Nexus IDs
+        id: ids
+        if: steps.mode.outputs.mode != 'skip'
+        run: python3 scripts/nexus_release.py resolve --game "${{ matrix.game }}" --mod "${{ matrix.mod }}" --file-version "${{ matrix.file }}"
+
       - uses: actions/download-artifact@v4
-        if: steps.config.outputs.enabled == 'true'
+        if: steps.mode.outputs.mode != 'skip'
         with:
           name: ${{ matrix.variant == 'linux' && 'release-linux' || 'release-windows' }}
           path: release
 
       - name: Package
         id: package
-        if: steps.config.outputs.enabled == 'true'
+        if: steps.mode.outputs.mode != 'skip'
         working-directory: release
         run: |
           base="KCDModManager-$VERSION"
@@ -136,19 +175,43 @@ jobs:
             echo "description=$description"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Upload to Nexus Mods
-        if: steps.config.outputs.enabled == 'true'
+      - name: Upload new version
+        if: steps.mode.outputs.mode == 'update'
         # v1.0.0-beta.11, pinned to the commit because the action is still in beta.
         uses: Nexus-Mods/upload-action@98532f7670c27cbecc78fae03fa3e278147827e2
         with:
           api_key: ${{ secrets.NEXUSMODS_API_KEY }}
-          file_id: ${{ matrix.file_id }}
+          file_id: ${{ steps.ids.outputs.file_id }}
           filename: ${{ steps.package.outputs.path }}
           version: ${{ env.VERSION }}
           display_name: ${{ steps.package.outputs.display }}
           description: ${{ steps.package.outputs.description }}
           category: main
           archive_existing_version: "true"
-          mod_id: ${{ matrix.mod_id }}
-          changelog: ${{ matrix.mod_id && needs.changelog.outputs.nexus_changelog || '' }}
-          update_mod_version: ${{ matrix.mod_id && 'true' || 'false' }}
+          mod_id: ${{ steps.ids.outputs.mod_id }}
+          changelog: ${{ matrix.changelog && needs.changelog.outputs.nexus_changelog || '' }}
+          update_mod_version: ${{ matrix.changelog && 'true' || 'false' }}
+
+      - name: Create file (first upload)
+        id: create
+        if: steps.mode.outputs.mode == 'create'
+        run: |
+          python3 scripts/nexus_release.py create-file \
+            --mod-id "${{ steps.ids.outputs.mod_id }}" \
+            --path "${{ steps.package.outputs.path }}" \
+            --name "${{ steps.package.outputs.display }}" \
+            --version "$VERSION" \
+            --description "${{ steps.package.outputs.description }}"
+
+      - name: Report new file ID
+        if: steps.mode.outputs.mode == 'create'
+        run: |
+          id="${{ steps.create.outputs.file_version_website_id }}"
+          echo "::notice::Created the ${{ matrix.variant }} file on the ${{ matrix.page }} page. Set NEXUSMODS_FILE_ID_${{ matrix.page }}_LINUX=$id so future releases add versions to it."
+          {
+            echo "### New Nexus file on the ${{ matrix.page }} page"
+            echo ""
+            echo "Set the repository variable \`NEXUSMODS_FILE_ID_${{ matrix.page }}_LINUX\` to \`$id\`:"
+            echo ""
+            echo "    gh variable set NEXUSMODS_FILE_ID_${{ matrix.page }}_LINUX --body $id --repo $GITHUB_REPOSITORY"
+          } >> "$GITHUB_STEP_SUMMARY"

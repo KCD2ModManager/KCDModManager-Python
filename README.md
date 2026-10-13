@@ -115,9 +115,9 @@ Every upload archives the previous version of that file. The portable upload als
 changelog section (as plain text) to the mod page and sets the page's version. Tags containing `-`
 (such as `v5.1.0-rc1`) are released on GitHub only.
 
-One-time setup in the GitHub repository settings (Secrets and variables, then Actions). File and
-mod IDs are shown in the Files tab of a mod page under "Advanced"; the action can only add versions
-to existing files, so upload the first Linux build of each page by hand.
+One-time setup in the GitHub repository settings (Secrets and variables, then Actions). All IDs
+are the numbers shown on the website: the mod ID from the page URL and the file ID from the Files
+tab. `scripts/nexus_release.py` translates them to the internal v3 IDs the upload endpoints expect.
 
 | Kind | Name | Value |
 | --- | --- | --- |
@@ -127,8 +127,11 @@ to existing files, so upload the first Linux build of each page by hand.
 | Variable | `NEXUSMODS_FILE_ID_KCD1_INSTALLER`, `NEXUSMODS_FILE_ID_KCD2_INSTALLER` | installer file |
 | Variable | `NEXUSMODS_FILE_ID_KCD1_LINUX`, `NEXUSMODS_FILE_ID_KCD2_LINUX` | Linux file |
 
-If the secret or a file ID is missing, that upload is skipped with a warning instead of failing
-the release. The key is only read from the secret and is never written to logs or artifacts.
+While a Linux file ID is unset, the release creates a new Linux file on that page (documented
+`POST /mod-files` endpoint) and prints its ID in the run summary; set the variable to that ID so
+later releases add versions to it instead of creating another file. A missing portable or
+installer file ID skips that upload with a warning. The key is only read from the secret and is
+never written to logs or artifacts.
 
 ## Project layout
 
