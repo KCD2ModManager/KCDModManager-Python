@@ -60,13 +60,13 @@ class FakeNexus:
                 "complete_presigned_url": "https://storage/complete",
             },
             ("POST", "/uploads/upload-uuid/finalise"): {"id": "upload-uuid", "state": "created"},
+            # Like the live API: the create response ID is not the one /mods/{id}/files lists.
             ("POST", "/mod-files"): {
-                "id": "new-file",
+                "id": "9869834856608",
                 "game_scoped_id": "1",
-                "name": "x",
+                "name": "KCD Mod Manager 5.0.0 (Linux)",
                 "file_category": "main",
             },
-            ("GET", "/mod-files/new-file/versions"): {"versions": [{"id": "v", "game_scoped_id": "999001"}]},
         }
         if (method, path) == ("GET", "/uploads/upload-uuid"):
             self.polls += 1
