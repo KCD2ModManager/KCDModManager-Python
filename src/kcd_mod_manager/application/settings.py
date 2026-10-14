@@ -39,6 +39,7 @@ class AppSettings:
     allow_workshop_mod_actions: bool = False
     allow_workshop_actions_warning_shown: bool = False
     conflict_detector_only_enabled_mods: bool = True
+    compact_mod_list: bool = False
     language: str = "en"
     game_path_kcd1: str = ""
     game_path_kcd2: str = ""

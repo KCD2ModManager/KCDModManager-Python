@@ -27,7 +27,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QListView,
     QMainWindow,
     QProgressBar,
     QPushButton,
@@ -66,7 +65,7 @@ from kcd_mod_manager.ui.dialogs import (
     GameSelectionDialog,
 )
 from kcd_mod_manager.ui.icons import swatch
-from kcd_mod_manager.ui.mod_list import ModDelegate, ModListModel
+from kcd_mod_manager.ui.mod_list import ModDelegate, ModListModel, ModListView
 from kcd_mod_manager.ui.settings_dialog import SettingsDialog, SettingsHooks
 from kcd_mod_manager.ui.tasks import GuiInvoker, TaskRunner
 from kcd_mod_manager.ui.theme import apply_theme, current_palette, palette_for
@@ -372,9 +371,15 @@ class MainWindow(QMainWindow):
         self.disable_all_button.clicked.connect(lambda: self.set_all_enabled(False))
         self.update_manifests_button = secondary_button(tr("UpdateAllManifestsText"), "update")
         self.update_manifests_button.clicked.connect(self.update_all_manifests)
+        self.compact_button = secondary_button(tr("ButtonCompactView"), "apps_list")
+        self.compact_button.setObjectName("toggleButton")
+        self.compact_button.setCheckable(True)
+        self.compact_button.setToolTip(tr("SettingsCompactListDesc"))
+        self.compact_button.toggled.connect(self._compact_toggled)
         actions.addWidget(self.enable_all_button)
         actions.addWidget(self.disable_all_button)
         actions.addStretch(1)
+        actions.addWidget(self.compact_button)
         actions.addWidget(self.update_manifests_button)
         page.addLayout(actions)
 
@@ -383,7 +388,7 @@ class MainWindow(QMainWindow):
         list_layout.setContentsMargins(0, 0, 0, 0)
         self.model = ModListModel(self)
         self.model.move_requested.connect(self._drop_move)
-        self.list_view = QListView(self.list_host)
+        self.list_view = ModListView(self.list_host)
         self.list_view.setObjectName("modList")
         self.list_view.setModel(self.model)
         self.list_view.setMouseTracking(True)
@@ -599,6 +604,8 @@ class MainWindow(QMainWindow):
         self._updating = True
         try:
             selected = self._selected_mod()
+            self.delegate.compact = self.settings.compact_mod_list
+            self.compact_button.setChecked(self.settings.compact_mod_list)
             self.model.reorder_allowed = self.reorder_allowed
             self.model.set_mods(self.visible())
             if selected is not None:
@@ -832,6 +839,13 @@ class MainWindow(QMainWindow):
     # ================================================================== list operations
     def _search_changed(self, text: str) -> None:
         self.search = text
+        self.refresh_view()
+
+    def _compact_toggled(self, checked: bool) -> None:
+        if self._updating or checked == self.settings.compact_mod_list:
+            return
+        self.settings.compact_mod_list = checked
+        self.session.save_settings()
         self.refresh_view()
 
     def _category_filter_changed(self, index: int) -> None:

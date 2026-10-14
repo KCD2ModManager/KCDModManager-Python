@@ -240,6 +240,13 @@ class SettingsDialog(QDialog):
 
     def _mods_page(self, layout: QVBoxLayout) -> None:
         self._toggle_row(
+            layout,
+            "compact_mod_list",
+            tr("SettingsCompactListTitle"),
+            tr("SettingsCompactListDesc"),
+            "apps_list",
+        )
+        self._toggle_row(
             layout, "mod_order_enabled", tr("SettingsModOrderTitle"), tr("SettingsModOrderDesc"), "sort"
         )
         self._toggle_row(
@@ -376,7 +383,7 @@ class SettingsDialog(QDialog):
         if name == "is_dark_mode":
             self.hooks.theme_changed(checked)
             self.refresh_theme()
-        elif name in ("allow_workshop_mod_actions", "enable_file_renaming"):
+        elif name in ("allow_workshop_mod_actions", "enable_file_renaming", "compact_mod_list"):
             self.hooks.view_changed()
 
     def _launch_args_changed(self) -> None:

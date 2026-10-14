@@ -200,6 +200,7 @@ QPushButton:disabled, QToolButton:disabled {{
     color: {p.text_disabled}; background-color: {p.input_disabled}; border-color: {p.separator};
 }}
 QPushButton:focus {{ outline: none; }}
+QPushButton#toggleButton:checked {{ background-color: {p.menu_highlight}; border-color: {p.accent_text}; }}
 QPushButton::menu-indicator {{ image: none; width: 0; }}
 QPushButton#primary, QToolButton#primary {{
     background-color: {p.primary}; color: #FFFFFF; border: 1px solid {p.primary};

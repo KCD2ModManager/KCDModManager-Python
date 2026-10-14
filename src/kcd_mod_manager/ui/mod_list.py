@@ -17,6 +17,7 @@ from PySide6.QtCore import (
     QRectF,
     QSize,
     Qt,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import (
@@ -37,6 +38,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QToolTip,
+    QWidget,
 )
 
 from kcd_mod_manager.domain.models import Mod
@@ -141,15 +143,72 @@ class ModListModel(QAbstractListModel):
         return False
 
 
+# --------------------------------------------------------------------------- view
+class ModListView(QListView):
+    """List view whose drag auto-scroll gets faster the closer the cursor is to (or past) an edge.
+
+    Qt's built-in auto-scroll starts at one pixel per tick in per-pixel scroll mode and only
+    reacts inside a 16 px margin, which makes reordering long lists impractical.
+    """
+
+    EDGE = 60
+    MAX_STEP = 30
+    MIN_STEP = 3
+    INTERVAL_MS = 16
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAutoScroll(False)
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setInterval(self.INTERVAL_MS)
+        self._scroll_timer.timeout.connect(self._auto_scroll)
+
+    def edge_step(self, y: int) -> int:
+        """Pixels to scroll per tick for a cursor at viewport position ``y`` (negative = up)."""
+        height = self.viewport().height()
+        edge = max(1, min(self.EDGE, height // 4))
+        if y < edge:
+            depth = edge - y
+        elif y > height - edge:
+            depth = height - edge - y
+        else:
+            return 0
+        speed = max(self.MIN_STEP, round(self.MAX_STEP * min(abs(depth), edge) / edge))
+        return -speed if depth > 0 else speed
+
+    def startDrag(self, supported_actions: Qt.DropAction) -> None:
+        self._scroll_timer.start()
+        try:
+            super().startDrag(supported_actions)
+        finally:
+            self._scroll_timer.stop()
+
+    def _auto_scroll(self) -> None:
+        step = self.edge_step(self.viewport().mapFromGlobal(QCursor.pos()).y())
+        if step:
+            bar = self.verticalScrollBar()
+            bar.setValue(bar.value() + step)
+
+
 # --------------------------------------------------------------------------- delegate
-ROW_HEIGHT = 60
-ROW_MARGIN_X, ROW_MARGIN_Y = 0, 3
+@dataclass(frozen=True, slots=True)
+class RowMetrics:
+    height: int
+    margin_y: int
+    button: int
+    name_px: int
+    text_pad_y: int
+
+
+STANDARD_ROW = RowMetrics(height=60, margin_y=3, button=28, name_px=14, text_pad_y=5)
+COMPACT_ROW = RowMetrics(height=32, margin_y=1, button=24, name_px=13, text_pad_y=0)
+ROW_MARGIN_X = 0
 PAD_X = 14
 SELECTION_BAR = 3
-BUTTON_SIZE = 28
 BUTTON_GAP = 2
 ICON_SIZE = 16
 VERSION_WIDTH = 72
+CATEGORY_WIDTH = 130
 DISABLED_OPACITY = 0.6
 
 BUTTON_COLORS = {
@@ -177,6 +236,8 @@ class RowLayout:
     warning: QRect
     text: QRect
     version: QRect
+    category: QRect
+    """Empty in the standard layout, where the category is the subtitle under the name."""
     buttons: dict[str, QRect] = field(default_factory=dict)
 
 
@@ -205,16 +266,22 @@ class ModDelegate(QStyledItemDelegate):
         self.dark = dark
         self.button_enabled: ButtonPredicate = lambda _mod, _name: True
         self._pressed: tuple[int, str] | None = None
+        self.compact = False
 
     def set_theme(self, palette: Palette, dark: bool) -> None:
         self.palette, self.dark = palette, dark
 
+    @property
+    def metrics(self) -> RowMetrics:
+        return COMPACT_ROW if self.compact else STANDARD_ROW
+
     # ------------------------------------------------------------------ geometry
     def sizeHint(self, option: QStyleOptionViewItem, index: ModelIndex) -> QSize:
-        return QSize(400, ROW_HEIGHT)
+        return QSize(400, self.metrics.height)
 
     def layout(self, rect: QRect, mod: Mod) -> RowLayout:
-        card = rect.adjusted(ROW_MARGIN_X, ROW_MARGIN_Y, -ROW_MARGIN_X, -ROW_MARGIN_Y)
+        m = self.metrics
+        card = rect.adjusted(ROW_MARGIN_X, m.margin_y, -ROW_MARGIN_X, -m.margin_y)
         cy = card.center().y()
         checkbox = QRect(card.left() + PAD_X, cy - 9, 18, 18)
         warning = QRect(checkbox.right() + 7, cy - 9, 18 if not mod.is_compatible else 0, 18)
@@ -223,13 +290,22 @@ class ModDelegate(QStyledItemDelegate):
         for name in reversed(self.BUTTONS):
             if name == "update" and not mod.has_update:
                 continue
-            x -= BUTTON_SIZE
-            buttons[name] = QRect(x, cy - BUTTON_SIZE // 2, BUTTON_SIZE, BUTTON_SIZE)
+            x -= m.button
+            buttons[name] = QRect(x, cy - m.button // 2, m.button, m.button)
             x -= BUTTON_GAP
+        category = QRect()
+        if self.compact:
+            category = QRect(x - CATEGORY_WIDTH - 6, card.top(), CATEGORY_WIDTH, card.height())
+            x = category.left()
         version = QRect(x - VERSION_WIDTH - 6, card.top(), VERSION_WIDTH, card.height())
         text_left = (warning.right() if warning.width() else checkbox.right()) + 9
-        text = QRect(text_left, card.top() + 5, max(10, version.left() - text_left - 10), card.height() - 10)
-        return RowLayout(card, checkbox, warning, text, version, buttons)
+        text = QRect(
+            text_left,
+            card.top() + m.text_pad_y,
+            max(10, version.left() - text_left - 10),
+            card.height() - 2 * m.text_pad_y,
+        )
+        return RowLayout(card, checkbox, warning, text, version, category, buttons)
 
     # ------------------------------------------------------------------ painting
     def _background(self, mod: Mod, state: QStyle.StateFlag) -> QColor:
@@ -287,6 +363,16 @@ class ModDelegate(QStyledItemDelegate):
                 mod.version or "", Qt.TextElideMode.ElideLeft, lay.version.width()
             ),
         )
+        if lay.category.width() and mod.category_name:
+            category_font = _font(base_font, 12)
+            painter.setFont(category_font)
+            painter.drawText(
+                lay.category,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                QFontMetrics(category_font).elidedText(
+                    mod.category_name, Qt.TextElideMode.ElideRight, lay.category.width()
+                ),
+            )
         painter.setOpacity(1.0)
         self._paint_buttons(painter, lay, mod, index.row(), selected)
 
@@ -298,11 +384,11 @@ class ModDelegate(QStyledItemDelegate):
 
     def _paint_text(self, painter: QPainter, lay: RowLayout, mod: Mod, base_font: QFont) -> None:
         p = self.palette
-        name_font = _font(base_font, 14)
+        name_font = _font(base_font, self.metrics.name_px)
         small = _font(base_font, 12)
         badge_font = _font(base_font, 10)
         fm = QFontMetrics(name_font)
-        has_subtitle = bool(mod.category_name)
+        has_subtitle = bool(mod.category_name) and not self.compact
         name_height = fm.height()
         block = name_height + (QFontMetrics(small).height() + 1 if has_subtitle else 0)
         top = lay.text.top() + (lay.text.height() - block) // 2

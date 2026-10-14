@@ -286,3 +286,37 @@ def test_context_menu_edits(window: MainWindow, monkeypatch: pytest.MonkeyPatch)
 def test_geometry_is_saved_on_close(window: MainWindow) -> None:
     window.close()
     assert window.ctx.session.settings_store.load().window_geometry
+
+
+def test_compact_view_halves_the_rows_and_is_saved(window: MainWindow) -> None:
+    window.resize(1100, 700)
+    window.show()
+    index = window.model.index(0)
+    standard = window.list_view.visualRect(index).height()
+    window.compact_button.click()
+    assert window.settings.compact_mod_list
+    assert window.ctx.session.settings_store.load().compact_mod_list
+    compact = window.list_view.visualRect(index).height()
+    assert compact < standard * 0.6
+    mod = window.model.mod_at(0)
+    assert mod is not None
+    lay = window.delegate.layout(window.list_view.visualRect(index), mod)
+    assert lay.version.right() < lay.category.left() < lay.buttons["up"].left()
+    window.list_view.viewport().grab()
+    window.compact_button.click()
+    assert not window.settings.compact_mod_list
+    assert window.list_view.visualRect(index).height() == standard
+
+
+def test_drag_auto_scroll_speeds_up_towards_the_edges(window: MainWindow) -> None:
+    window.resize(1100, 700)
+    window.show()
+    view = window.list_view
+    height = view.viewport().height()
+    assert height > 4 * view.EDGE
+    assert not view.hasAutoScroll()
+    assert view.edge_step(height // 2) == 0
+    near_top, at_top, above = view.edge_step(view.EDGE - 5), view.edge_step(0), view.edge_step(-200)
+    assert 0 > near_top > at_top == above == -view.MAX_STEP
+    assert view.edge_step(height) == view.MAX_STEP
+    assert 0 < view.edge_step(height - view.EDGE + 5) < view.MAX_STEP

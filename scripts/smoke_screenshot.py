@@ -135,6 +135,9 @@ def main() -> int:
         ctx.settings.is_dark_mode = dark
         window.apply_theme()
         save(window, "main-window", theme)
+        window.compact_button.click()
+        save(window, "main-window-compact", theme)
+        window.compact_button.click()
 
         settings = SettingsDialog(window, ctx.settings, dict(ctx.session.installs), hooks)
         settings.show()
