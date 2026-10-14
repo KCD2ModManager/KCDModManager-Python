@@ -9,6 +9,8 @@ headings, links or formatting, matching the existing changelog on the mod pages.
 
 ## [Unreleased]
 
+## [5.1.0]
+
 - Added Simplified Chinese localization
 - On the first start the manager uses your system language if it is supported (English, German, French or Chinese)
 - New app icon
