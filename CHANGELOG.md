@@ -9,6 +9,8 @@ headings, links or formatting, matching the existing changelog on the mod pages.
 
 ## [Unreleased]
 
+## [5.2.0]
+
 - New compact view: one slim line per mod with the category next to the version, switchable above the mod list or in the settings
 - Dragging a mod to the top or bottom edge of the list scrolls again, faster the closer you get to the edge
 - Update notifications now check the new release page, so new versions of the manager are announced again
