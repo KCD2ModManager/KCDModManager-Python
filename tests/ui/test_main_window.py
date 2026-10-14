@@ -320,3 +320,25 @@ def test_drag_auto_scroll_speeds_up_towards_the_edges(window: MainWindow) -> Non
     assert 0 > near_top > at_top == above == -view.MAX_STEP
     assert view.edge_step(height) == view.MAX_STEP
     assert 0 < view.edge_step(height - view.EDGE + 5) < view.MAX_STEP
+
+
+def test_endorse_prompt_without_login_opens_the_mod_page_once(
+    window: MainWindow, no_dialogs: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kcd_mod_manager.ui import main_window
+
+    opened: list[str] = []
+    monkeypatch.setattr(main_window, "open_url", opened.append)
+    window.settings.launch_count = 50
+    window.settings.first_launch_date = "2020-01-01"
+    window.maybe_ask_for_endorsement()
+    assert no_dialogs == [f"confirm:{tr('EndorsePromptBrowser')}"]
+    assert opened == ["https://www.nexusmods.com/kingdomcomedeliverance2/mods/187"]
+    assert window.ctx.session.settings_store.load().endorse_prompt_done
+    window.maybe_ask_for_endorsement()
+    assert len(no_dialogs) == 1
+
+
+def test_start_counts_launches(window: MainWindow) -> None:
+    saved = window.ctx.session.settings_store.load()
+    assert saved.launch_count == 1 and saved.first_launch_date

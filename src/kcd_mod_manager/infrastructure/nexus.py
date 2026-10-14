@@ -6,6 +6,7 @@ Only the endpoints the original manager used are implemented:
 * ``GET  /v1/games/{domain}/mods/{id}/files.json``
 * ``GET  /v1/games/{domain}/mods/{id}/files/{file_id}/download_link.json`` (premium only)
 * ``POST /v1/games/{domain}/mods/{id}/endorse.json``
+* ``GET  /v1/user/endorsements.json`` (to avoid asking users who already endorsed the manager)
 
 The API key is sent in the ``apikey`` header and is never logged.
 """
@@ -173,6 +174,23 @@ class NexusClient:
 
     def endorse(self, domain: str, mod_number: int) -> None:
         self._request("POST", f"/games/{domain}/mods/{mod_number}/endorse.json")
+
+    def has_endorsed(self, domain: str, mod_number: int) -> bool:
+        data = self._request("GET", "/user/endorsements.json")
+        if not isinstance(data, list):
+            return False
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                same_mod = (
+                    str(entry.get("domain_name")) == domain and int(entry.get("mod_id") or 0) == mod_number
+                )
+            except (TypeError, ValueError):
+                continue
+            if same_mod and str(entry.get("status") or "").lower() == "endorsed":
+                return True
+        return False
 
     def download(
         self,

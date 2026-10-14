@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QPoint, Qt, QTimer
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from kcd_mod_manager import __version__
+from kcd_mod_manager.application.endorsement import record_launch, should_ask_for_endorsement
 from kcd_mod_manager.application.library import BACKUP_ROOT_NAME, InstallResult, InstallStatus
 from kcd_mod_manager.application.session import SessionError, UpdateCheckSummary
 from kcd_mod_manager.bootstrap import AppContext
@@ -43,7 +45,12 @@ from kcd_mod_manager.domain.library_view import UNCATEGORIZED, SortMode, next_so
 from kcd_mod_manager.domain.models import ConflictGroup, GameInstall, GameType, Mod
 from kcd_mod_manager.domain.naming import extract_mod_number
 from kcd_mod_manager.i18n import tr
-from kcd_mod_manager.infrastructure.app_updates import AppUpdate, check_for_app_update
+from kcd_mod_manager.infrastructure.app_updates import (
+    MANAGER_MOD_NUMBERS,
+    AppUpdate,
+    check_for_app_update,
+    manager_page,
+)
 from kcd_mod_manager.infrastructure.archives import is_supported_archive, rar_support_available
 from kcd_mod_manager.infrastructure.conflict_scanner import ScanCancelled
 from kcd_mod_manager.infrastructure.nexus import (
@@ -93,6 +100,7 @@ SORT_LABELS = {
     SortMode.CATEGORY: "ButtonSortCategory",
 }
 ARCHIVE_FILTER = "*.zip *.7z *.rar"
+ENDORSE_PROMPT_DELAY_MS = 8000
 
 
 class MainWindow(QMainWindow):
@@ -114,6 +122,7 @@ class MainWindow(QMainWindow):
         self._scan_cancel: threading.Event | None = None
         self._install_queue: list[tuple[Path, int, bool]] = []
         self._cover_game: GameType | None = None
+        self._app_update_offered = False
 
         self.setWindowTitle(f"KCD Mod Manager {__version__}")
         icon = resource_path("images", "logo.ico")
@@ -693,6 +702,8 @@ class MainWindow(QMainWindow):
             dialogs.info(self, tr("NoGameSelectedMessage"))
             return False
         self.load_game(game)
+        record_launch(self.settings, date.today())
+        self.session.save_settings()
         if self.ctx.imported_legacy:
             QTimer.singleShot(0, lambda: self.status(tr("LegacyImportDone")))
         if self.ctx.settings_recovered:
@@ -1218,6 +1229,7 @@ class MainWindow(QMainWindow):
             )
         if self.settings.enable_update_notifications:
             self.tasks.run(check_for_app_update, self._app_update_found, lambda _e: None, serial=False)
+        QTimer.singleShot(ENDORSE_PROMPT_DELAY_MS, self.maybe_ask_for_endorsement)
 
     def _after_account_refresh(self) -> None:
         self._refresh_account()
@@ -1225,8 +1237,54 @@ class MainWindow(QMainWindow):
             self.check_all_updates(quiet=True)
 
     def _app_update_found(self, update: AppUpdate | None) -> None:
-        if update is not None and dialogs.confirm(self, tr("AppUpdateAvailable", update.latest_version)):
-            self._open_url(update.download_page)
+        if update is None:
+            return
+        self._app_update_offered = True
+        if dialogs.confirm(self, tr("AppUpdateAvailable", update.latest_version)):
+            self._open_url(manager_page(self.session.game))
+
+    def maybe_ask_for_endorsement(self) -> None:
+        """Ask once, after regular use, whether the user wants to endorse the manager."""
+        if self._app_update_offered or not should_ask_for_endorsement(self.settings, date.today()):
+            return
+        game = self.session.game or GameType.KCD2
+        if not self.ctx.nexus.is_logged_in:
+            self._ask_for_endorsement(game, already_endorsed=False)
+            return
+        self.tasks.run(
+            lambda: self.ctx.nexus.client.has_endorsed(game.nexus_domain, MANAGER_MOD_NUMBERS[game]),
+            lambda done: self._ask_for_endorsement(game, already_endorsed=bool(done)),
+            lambda _exc: self._ask_for_endorsement(game, already_endorsed=False),
+            serial=False,
+        )
+
+    def _ask_for_endorsement(self, game: GameType, already_endorsed: bool) -> None:
+        if not already_endorsed and QApplication.activeModalWidget() is not None:
+            return
+        self.settings.endorse_prompt_done = True
+        self.session.save_settings()
+        if already_endorsed:
+            return
+        logged_in = self.ctx.nexus.is_logged_in
+        message = tr("EndorsePromptLoggedIn" if logged_in else "EndorsePromptBrowser")
+        if not dialogs.confirm(self, message, tr("EndorsePromptTitle")):
+            return
+        page = manager_page(game)
+        if not logged_in:
+            self._open_url(page)
+            return
+
+        def failed(exc: BaseException) -> None:
+            log.info("Endorsing the manager failed: %s", type(exc).__name__)
+            dialogs.info(self, tr("EndorseFailedOpenPage"))
+            self._open_url(page)
+
+        self.tasks.run(
+            lambda: self.ctx.nexus.client.endorse(game.nexus_domain, MANAGER_MOD_NUMBERS[game]),
+            lambda _: dialogs.info(self, tr("EndorseThanks")),
+            failed,
+            serial=False,
+        )
 
     def login(self) -> None:
         cancel = threading.Event()

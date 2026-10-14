@@ -10,6 +10,7 @@ import pytest
 from kcd_mod_manager.application.nexus_account import NexusAccount
 from kcd_mod_manager.application.session import ManagerSession
 from kcd_mod_manager.application.settings import AppSettings
+from kcd_mod_manager.domain.models import GameType
 from kcd_mod_manager.infrastructure import app_updates
 from kcd_mod_manager.infrastructure.credentials import MemoryCredentialStore
 from kcd_mod_manager.infrastructure.nexus import (
@@ -80,6 +81,34 @@ def test_endorse_uses_post() -> None:
     client, seen = client_with(lambda r: httpx.Response(200, json={"status": "Endorsed"}))
     client.endorse("d", 5)
     assert seen[0].method == "POST" and seen[0].url.path.endswith("/mods/5/endorse.json")
+
+
+def test_has_endorsed_reads_the_users_endorsements() -> None:
+    payload = [
+        {"mod_id": 187, "domain_name": "kingdomcomedeliverance2", "status": "Endorsed"},
+        {"mod_id": 2119, "domain_name": "kingdomcomedeliverance", "status": "Abstained"},
+        {"mod_id": "bad", "domain_name": "kingdomcomedeliverance2"},
+        "noise",
+    ]
+    client, seen = client_with(lambda r: httpx.Response(200, json=payload))
+    assert client.has_endorsed("kingdomcomedeliverance2", 187)
+    assert not client.has_endorsed("kingdomcomedeliverance", 2119)
+    assert not client.has_endorsed("kingdomcomedeliverance2", 1)
+    assert seen[0].method == "GET" and seen[0].url.path == "/v1/user/endorsements.json"
+
+
+def test_app_update_check_uses_the_python_release_repository() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"tag_name": "v9.0.0"})
+
+    update = app_updates.check_for_app_update("5.1.0", transport=httpx.MockTransport(handler))
+    assert seen == ["/repos/KCD2ModManager/KCDModManager-Python/releases/latest"]
+    assert update is not None and update.latest_version == "9.0.0"
+    assert app_updates.manager_page(GameType.KCD1).endswith("/kingdomcomedeliverance/mods/2119")
+    assert app_updates.manager_page(None).endswith("/kingdomcomedeliverance2/mods/187")
 
 
 def test_missing_key() -> None:

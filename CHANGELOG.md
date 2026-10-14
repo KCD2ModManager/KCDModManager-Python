@@ -11,6 +11,8 @@ headings, links or formatting, matching the existing changelog on the mod pages.
 
 - New compact view: one slim line per mod with the category next to the version, switchable above the mod list or in the settings
 - Dragging a mod to the top or bottom edge of the list scrolls again, faster the closer you get to the edge
+- Update notifications now check the new release page, so new versions of the manager are announced again
+- After regular use, the manager asks once whether you want to endorse it on Nexus Mods
 
 ## [5.1.0]
 

@@ -8,13 +8,23 @@ from dataclasses import dataclass
 import httpx
 
 from kcd_mod_manager import __version__
+from kcd_mod_manager.domain.models import GameType
 from kcd_mod_manager.domain.versioning import compare_app_versions
 
 log = logging.getLogger(__name__)
 
-RELEASES_REPOSITORY = "KCD2ModManager/KCD2-Mod-Manager"
+RELEASES_REPOSITORY = "KCD2ModManager/KCDModManager-Python"
 """GitHub repository whose latest release is compared with the running version."""
-DOWNLOAD_PAGE = "https://www.nexusmods.com/kingdomcomedeliverance2/mods/187"
+MANAGER_MOD_NUMBERS = {GameType.KCD1: 2119, GameType.KCD2: 187}
+"""The manager's own Nexus Mods page for each game."""
+
+
+def manager_page(game: GameType | None = None) -> str:
+    game = game or GameType.KCD2
+    return f"https://www.nexusmods.com/{game.nexus_domain}/mods/{MANAGER_MOD_NUMBERS[game]}"
+
+
+DOWNLOAD_PAGE = manager_page(GameType.KCD2)
 
 
 @dataclass(frozen=True, slots=True)
