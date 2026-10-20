@@ -9,6 +9,8 @@ headings, links or formatting, matching the existing changelog on the mod pages.
 
 ## [Unreleased]
 
+## [5.4.0]
+
 - While the game is running, mod changes are locked and the Start Game button becomes Stop Game
 - Conflict window: filter box and a Disable all losers button per conflict
 - Select several mods at once (Ctrl/Shift) and enable, disable or categorize them together from the context menu

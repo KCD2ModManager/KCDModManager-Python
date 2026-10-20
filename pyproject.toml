@@ -1,6 +1,6 @@
 [project]
 name = "kcd-mod-manager"
-version = "5.3.0"
+version = "5.4.0"
 description = "Cross-platform mod manager for Kingdom Come: Deliverance and Kingdom Come: Deliverance II"
 readme = "README.md"
 license = "GPL-3.0-only"

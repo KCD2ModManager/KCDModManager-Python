@@ -10,6 +10,7 @@ from PySide6.QtCore import QEvent, QMimeData, QModelIndex, QObject
 from PySide6.QtWidgets import QApplication, QWidget
 from pytestqt.qtbot import QtBot
 
+from kcd_mod_manager import __version__
 from kcd_mod_manager.bootstrap import AppContext, build_context
 from kcd_mod_manager.domain.models import GameType
 from kcd_mod_manager.i18n import tr
@@ -454,4 +455,4 @@ def test_multi_select_bulk_actions(window: MainWindow) -> None:
 
 def test_manual_app_update_check_reports_up_to_date(window: MainWindow, no_dialogs: list[str]) -> None:
     window.check_app_update()
-    assert no_dialogs == [f"info:{tr('UpdateCheckNoUpdate', '5.3.0')}"]
+    assert no_dialogs == [f"info:{tr('UpdateCheckNoUpdate', __version__)}"]
