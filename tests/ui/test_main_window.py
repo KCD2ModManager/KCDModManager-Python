@@ -391,5 +391,67 @@ def test_start_button_reflects_a_running_game(window: MainWindow, monkeypatch: p
     monkeypatch.setattr(main_window, "is_game_running", lambda _install: True)
     window._refresh_game_running()
     assert window._game_running
-    assert not window.start_button.isEnabled()
-    assert window.start_button.text() == tr("ButtonGameRunning")
+    assert window.start_button.isEnabled()
+    assert window.start_button.text() == tr("ButtonStopGame")
+
+
+def test_conflict_dialog_filter_and_disable_losers(window: MainWindow) -> None:
+    from kcd_mod_manager.ui.dialogs import ConflictActions, ConflictDialog
+
+    dialog = ConflictDialog(
+        window,
+        list(window.session.conflicts),
+        {m.id: m.name for m in window.session.mods},
+        set(),
+        actions=ConflictActions(window._conflict_action),
+        mods=list(window.session.mods),
+    )
+    group = dialog.tree.topLevelItem(0)
+    assert group is not None
+    dialog.filter_edit.setText("does-not-exist")
+    assert group.isHidden()
+    dialog.filter_edit.setText("")
+    assert not group.isHidden()
+    dialog.tree.setCurrentItem(group)
+    assert dialog.losers_button.isEnabled()
+    dialog.losers_button.click()
+    assert not window.session.mods[0].is_enabled
+    assert dialog.tree.topLevelItemCount() == 0
+    dialog.close()
+
+
+def test_game_running_locks_mod_actions(window: MainWindow, monkeypatch: pytest.MonkeyPatch) -> None:
+    from kcd_mod_manager.ui import main_window
+
+    monkeypatch.setattr(main_window, "is_game_running", lambda _install: True)
+    window._refresh_game_running()
+    assert not window.add_button.isEnabled()
+    assert not window.enable_all_button.isEnabled()
+    assert window.start_button.text() == tr("ButtonStopGame")
+    mod = window.session.mods[0]
+    was = mod.is_enabled
+    window.toggle_mod(mod)
+    assert mod.is_enabled is was
+    assert window.status_label.text() == tr("ModActionsLockedWhileRunning")
+
+
+def test_multi_select_bulk_actions(window: MainWindow) -> None:
+    from PySide6.QtCore import QItemSelectionModel
+
+    selection = window.list_view.selectionModel()
+    for row in (0, 1):
+        selection.select(window.model.index(row), QItemSelectionModel.SelectionFlag.Select)
+    mods = window.selected_mods()
+    assert [m.id for m in mods] == ["alpha", "beta"]
+    window.set_selected_enabled(mods, False)
+    assert not any(m.is_enabled for m in mods)
+    category = window.session.create_category("Bulk")
+    window.set_selected_category(mods, category.id)
+    assert all(m.category_id == category.id for m in mods)
+    menu = window._mod_menu(mods[0])
+    assert any(str(len(mods)) in action.text() for action in menu.actions())
+
+
+def test_manual_app_update_check_reports_up_to_date(window: MainWindow, no_dialogs: list[str]) -> None:
+    window.check_app_update()
+    assert no_dialogs == [f"info:{tr('UpdateCheckNoUpdate', '5.3.0')}"]

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kcd_mod_manager import __version__
 from kcd_mod_manager.application.settings import SUPPORTED_LANGUAGES, AppSettings
 from kcd_mod_manager.domain.models import GameInstall, GameType, Mod
 from kcd_mod_manager.i18n import LANGUAGE_NAMES, tr
@@ -236,6 +237,10 @@ class SettingsDialog(QDialog):
         )
         self._toggle_row(
             layout, "is_dev_mode", tr("SettingsDevModeTitle"), tr("SettingsDevModeDesc"), "wrench"
+        )
+        self._section(layout, tr("SettingsSectionAbout"))
+        layout.addWidget(
+            SettingRow(tr("SettingsVersionTitle"), f"KCD Mod Manager {__version__}", None, "info")
         )
 
     def _mods_page(self, layout: QVBoxLayout) -> None:

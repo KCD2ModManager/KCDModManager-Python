@@ -337,6 +337,15 @@ class ManagerSession:
             mod.is_enabled = enabled
         self.save_mod_order()
 
+    def set_enabled_many(self, mods: Sequence[Mod], enabled: bool) -> None:
+        for mod in mods:
+            mod.is_enabled = enabled
+        self.save_mod_order()
+
+    def set_category_many(self, mods: Sequence[Mod], category_id: str | None) -> None:
+        for mod in mods:
+            self.set_category(mod, category_id)
+
     def move(self, mod: Mod, visible: Sequence[Mod], target_index: int) -> bool:
         if move_in_scope(self.mods, visible, mod, target_index):
             self.save_mod_order()

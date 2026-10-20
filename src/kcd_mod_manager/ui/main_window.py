@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QPoint, Qt, QTimer
+from PySide6.QtCore import QByteArray, QItemSelectionModel, QPoint, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -67,6 +67,7 @@ from kcd_mod_manager.infrastructure.platform_actions import (
     launch_game,
     open_path,
     open_url,
+    stop_game,
 )
 from kcd_mod_manager.infrastructure.self_update import InstallKind, detect_install_kind, prepare_update
 from kcd_mod_manager.resources import resource_path
@@ -298,6 +299,8 @@ class MainWindow(QMainWindow):
 
         self.updates_nav = self._nav_button(tr("MenuCheckUpdates"), "update", self.check_all_updates)
         layout.addWidget(self.updates_nav)
+        self.app_update_nav = self._nav_button(tr("MenuCheckAppUpdate"), "update", self.check_app_update)
+        layout.addWidget(self.app_update_nav)
         self.folders_nav = self._nav_button(tr("NavFolders"), "folder")
         folders_menu = RoundedMenu("", self.folders_nav)
         folders_menu.addAction(tr("MenuOpenModsFolder"), self._open_mods_folder)
@@ -413,7 +416,7 @@ class MainWindow(QMainWindow):
         self.list_view.setObjectName("modList")
         self.list_view.setModel(self.model)
         self.list_view.setMouseTracking(True)
-        self.list_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.list_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.list_view.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.list_view.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.list_view.setDragEnabled(True)
@@ -454,7 +457,7 @@ class MainWindow(QMainWindow):
         footer.addWidget(self.add_button)
         self.start_button = primary_button(tr("ButtonStartGame"), "play_filled")
         self.start_button.setMinimumWidth(180)
-        self.start_button.clicked.connect(self.start_game)
+        self.start_button.clicked.connect(self._start_or_stop_game)
         footer.addWidget(self.start_button)
         return bar
 
@@ -625,6 +628,7 @@ class MainWindow(QMainWindow):
         self._updating = True
         try:
             selected = self._selected_mod()
+            selected_ids = {m.id for m in self.selected_mods()}
             self.delegate.compact = self.settings.compact_mod_list
             self.compact_button.setChecked(self.settings.compact_mod_list)
             self.model.reorder_allowed = self.reorder_allowed
@@ -633,6 +637,13 @@ class MainWindow(QMainWindow):
                 row = self.model.row_of(selected)
                 if row >= 0:
                     self.list_view.setCurrentIndex(self.model.index(row))
+            selection = self.list_view.selectionModel()
+            for mod in self.model.mods:
+                if mod.id in selected_ids:
+                    selection.select(
+                        self.model.index(self.model.row_of(mod)),
+                        QItemSelectionModel.SelectionFlag.Select,
+                    )
             enabled = sum(1 for m in self.session.mods if m.is_enabled)
             total = len(self.session.mods)
             self.enabled_label.setText(tr("ModsEnabled", f"{enabled}/{total}"))
@@ -703,6 +714,25 @@ class MainWindow(QMainWindow):
     def _selected_mod(self) -> Mod | None:
         index = self.list_view.currentIndex()
         return self.model.mod_at(index.row()) if index.isValid() else None
+
+    def selected_mods(self) -> list[Mod]:
+        mods: list[Mod] = []
+        for index in self.list_view.selectionModel().selectedIndexes():
+            mod = self.model.mod_at(index.row())
+            if mod is not None:
+                mods.append(mod)
+        return mods
+
+    def set_selected_enabled(self, mods: list[Mod], enabled: bool) -> None:
+        if self._mod_actions_blocked():
+            return
+        local = [m for m in mods if not m.is_workshop_mod]
+        self._guard(lambda: self.session.set_enabled_many(local, enabled))
+        self.refresh_view()
+
+    def set_selected_category(self, mods: list[Mod], category_id: str | None) -> None:
+        self._guard(lambda: self.session.set_category_many(mods, category_id))
+        self.refresh_view()
 
     # ================================================================== startup & game
     def start(self) -> bool:
@@ -889,14 +919,21 @@ class MainWindow(QMainWindow):
         self.refresh_view()
 
     def toggle_mod(self, mod: Mod) -> None:
+        if self._mod_actions_blocked():
+            self.refresh_view()
+            return
         self._guard(lambda: self.session.set_enabled(mod, not mod.is_enabled))
         self.refresh_view()
 
     def set_all_enabled(self, enabled: bool) -> None:
+        if self._mod_actions_blocked():
+            return
         self._guard(lambda: self.session.set_all_enabled(enabled))
         self.refresh_view()
 
     def move_mod(self, mod: Mod, target: int) -> None:
+        if self._mod_actions_blocked():
+            return
         if not self.reorder_allowed:
             dialogs.warn(self, tr("ErrorActionNotAllowed"))
             return
@@ -910,7 +947,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, lambda: self.move_mod(mod, target))
 
     def delete_mod(self, mod: Mod) -> None:
-        if mod.is_workshop_mod:
+        if self._mod_actions_blocked() or mod.is_workshop_mod:
             return
         if self.settings.ask_on_delete:
             ok, dont_ask = dialogs.confirm_delete(self, mod.name)
@@ -944,11 +981,29 @@ class MainWindow(QMainWindow):
         index = self.list_view.indexAt(pos)
         mod = self.model.mod_at(index.row()) if index.isValid() else None
         if mod is not None:
-            self.list_view.setCurrentIndex(index)
+            if index not in self.list_view.selectionModel().selectedIndexes():
+                self.list_view.setCurrentIndex(index)
             self._mod_menu(mod).exec(self.list_view.viewport().mapToGlobal(pos))
 
     def _mod_menu(self, mod: Mod) -> RoundedMenu:
         menu = RoundedMenu("", self)
+        selected = self.selected_mods()
+        if len(selected) > 1 and mod in selected:
+            enable = menu.addAction(tr("ContextMenuEnableSelected", len(selected)))
+            enable.triggered.connect(lambda: self.set_selected_enabled(selected, True))
+            disable = menu.addAction(tr("ContextMenuDisableSelected", len(selected)))
+            disable.triggered.connect(lambda: self.set_selected_enabled(selected, False))
+            menu.addSeparator()
+            category_menu = menu.add_submenu(tr("ContextMenuSetCategory"))
+            category_menu.setEnabled(bool(self.session.categories))
+            for category in self.session.categories:
+                action = category_menu.addAction(category.name)
+                action.triggered.connect(
+                    lambda _=False, cid=category.id: self.set_selected_category(selected, cid)
+                )
+            clear = menu.addAction(tr("ContextMenuClearCategory"))
+            clear.triggered.connect(lambda: self.set_selected_category(selected, None))
+            return menu
         allowed = self._workshop_allowed(mod)
         local = not mod.is_workshop_mod
 
@@ -1075,6 +1130,8 @@ class MainWindow(QMainWindow):
         self._guard(lambda: self.session.toggle_update_checks(mod))
 
     def update_all_manifests(self) -> None:
+        if self._mod_actions_blocked():
+            return
         install = self.session.install
         if install is None or not install.game_version:
             dialogs.error(self, tr("CouldNotDetectGameVersion"))
@@ -1101,7 +1158,7 @@ class MainWindow(QMainWindow):
             self.install_paths([Path(folder)])
 
     def install_paths(self, paths: list[Path]) -> None:
-        if self.session.install is None:
+        if self.session.install is None or self._mod_actions_blocked():
             return
         for path in paths:
             if path.is_dir():
@@ -1178,9 +1235,43 @@ class MainWindow(QMainWindow):
             except Exception as exc:  # process enumeration must never break the UI
                 log.debug("Game process check failed: %s", exc)
         self._game_running = running
-        self.start_button.setEnabled(install is not None and not running)
-        self.start_button.setText(tr("ButtonGameRunning") if running else tr("ButtonStartGame"))
+        self.start_button.setEnabled(install is not None and not self.tasks.busy)
+        self.start_button.setText(tr("ButtonStopGame") if running else tr("ButtonStartGame"))
         self.start_button.setToolTip(tr("GameRunningTooltip") if running else "")
+        for widget in (
+            self.add_button,
+            self.enable_all_button,
+            self.disable_all_button,
+            self.update_manifests_button,
+        ):
+            widget.setEnabled(not running)
+
+    def _mod_actions_blocked(self) -> bool:
+        """True while the game runs: the manager must not change mods or their order now."""
+        if not self._game_running:
+            return False
+        self.status(tr("ModActionsLockedWhileRunning"))
+        return True
+
+    def _start_or_stop_game(self) -> None:
+        if self._game_running:
+            self.stop_game()
+        else:
+            self.start_game()
+
+    def stop_game(self) -> None:
+        install = self.session.install
+        if install is None or not self._game_running:
+            return
+        if not dialogs.confirm(self, tr("StopGameConfirm"), tr("ButtonStopGame")):
+            return
+        try:
+            stopped = stop_game(install)
+        except Exception as exc:
+            log.debug("Stopping the game failed: %s", exc)
+            stopped = False
+        self.status(tr("StatusGameStopped") if stopped else tr("StatusFailedToStopGame"))
+        QTimer.singleShot(600, self._refresh_game_running)
 
     def start_game(self) -> None:
         install = self.session.install
@@ -1267,7 +1358,16 @@ class MainWindow(QMainWindow):
         mod = next((m for m in self.session.mods if m.id == mod_id), None)
         if mod is None:
             return list(self.session.conflicts), list(self.session.mods)
-        if action == "disable":
+        if action == "disable_losers":
+            group = next((g for g in self.session.conflicts if mod_id in g.mod_ids), None)
+            if group is not None:
+                losers = [
+                    m
+                    for m in self.session.mods
+                    if m.id in group.mod_ids[:-1] and m.is_enabled and not m.is_workshop_mod
+                ]
+                self._guard(lambda: self.session.set_enabled_many(losers, False))
+        elif action == "disable":
             self._guard(lambda: self.session.set_enabled(mod, False))
         elif action == "win":
             self._guard(lambda: self.session.move(mod, list(self.session.mods), len(self.session.mods) - 1))
@@ -1313,6 +1413,22 @@ class MainWindow(QMainWindow):
         self._refresh_account()
         if self.settings.enable_update_notifications and self.ctx.nexus.is_logged_in:
             self.check_all_updates(quiet=True)
+
+    def check_app_update(self) -> None:
+        if not self.online:
+            dialogs.info(self, tr("UpdateCheckNoUpdate", __version__))
+            return
+        self.status(tr("UpdateCheckInProgress"))
+        self.tasks.run(
+            check_for_app_update,
+            lambda update: (
+                self._app_update_found(update)
+                if update is not None
+                else dialogs.info(self, tr("UpdateCheckNoUpdate", __version__))
+            ),
+            lambda _e: dialogs.info(self, tr("UpdateCheckNoUpdate", __version__)),
+            serial=False,
+        )
 
     def _app_update_found(self, update: AppUpdate | None) -> None:
         if update is None:

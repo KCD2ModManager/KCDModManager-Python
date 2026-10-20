@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from kcd_mod_manager.domain.models import GameInstall, GameType
-from kcd_mod_manager.infrastructure.platform_actions import is_game_running
+from kcd_mod_manager.infrastructure.platform_actions import game_process_ids, is_game_running
 from kcd_mod_manager.infrastructure.self_update import (
     InstallKind,
     SelfUpdateError,
@@ -91,3 +91,10 @@ def test_prepare_update_rejects_a_bad_checksum(tmp_path: Path) -> None:
             executable=tmp_path / "KCDModManager" / "KCDModManager.exe",
             work_dir=tmp_path / "update",
         )
+
+
+def test_game_process_ids_match_only_this_install(tmp_path: Path) -> None:
+    root = tmp_path / "game"
+    exe = root / "KingdomCome.exe"
+    install = GameInstall(GameType.KCD1, root, exe, root / "Mods")
+    assert game_process_ids(install, [(10, exe), (11, tmp_path / "x.exe")]) == [10]

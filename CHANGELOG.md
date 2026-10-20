@@ -9,6 +9,11 @@ headings, links or formatting, matching the existing changelog on the mod pages.
 
 ## [Unreleased]
 
+- While the game is running, mod changes are locked and the Start Game button becomes Stop Game
+- Conflict window: filter box and a Disable all losers button per conflict
+- Select several mods at once (Ctrl/Shift) and enable, disable or categorize them together from the context menu
+- New sidebar entry to check for manager updates manually; the version is shown in the settings
+
 ## [5.3.0]
 
 - The manager now updates itself: new versions are downloaded, verified and installed automatically (portable, installer and AppImage)

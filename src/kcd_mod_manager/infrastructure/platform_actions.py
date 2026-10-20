@@ -16,6 +16,7 @@ import logging
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import webbrowser
@@ -87,30 +88,35 @@ def _same_path(a: Path, b: Path) -> bool:
         return os.path.normcase(str(a)) == os.path.normcase(str(b))
 
 
-def running_executables() -> list[Path]:
-    """Executable paths of running processes (best effort, no third-party dependency)."""
-    paths: list[Path] = []
+def running_processes() -> list[tuple[int, Path]]:
+    """(pid, executable path) of running processes (best effort, no third-party dependency)."""
+    processes: list[tuple[int, Path]] = []
     if sys.platform == "win32":
-        paths.extend(_running_executables_windows())
+        processes.extend(_running_processes_windows())
     elif sys.platform.startswith("linux"):
         proc = Path("/proc")
         if proc.is_dir():
             for entry in proc.iterdir():
                 if not entry.name.isdigit():
                     continue
+                pid = int(entry.name)
                 with contextlib.suppress(OSError):
-                    paths.append((entry / "exe").readlink())
+                    processes.append((pid, (entry / "exe").readlink()))
                 try:  # Proton: the exe appears in the command line, not as /proc exe
                     for token in (entry / "cmdline").read_bytes().split(b"\0"):
                         text = token.decode("utf-8", "ignore")
                         if text.lower().endswith(".exe"):
-                            paths.append(Path(text))
+                            processes.append((pid, Path(text)))
                 except OSError:
                     continue
-    return paths
+    return processes
 
 
-def _running_executables_windows() -> list[Path]:
+def running_executables() -> list[Path]:
+    return [path for _pid, path in running_processes()]
+
+
+def _running_processes_windows() -> list[tuple[int, Path]]:
     import ctypes
     from ctypes import wintypes
 
@@ -121,7 +127,7 @@ def _running_executables_windows() -> list[Path]:
     if not psapi.EnumProcesses(process_ids, ctypes.sizeof(process_ids), ctypes.byref(needed)):
         return []
     count = needed.value // ctypes.sizeof(wintypes.DWORD)
-    paths: list[Path] = []
+    processes: list[tuple[int, Path]] = []
     buffer = ctypes.create_unicode_buffer(32768)
     for pid in process_ids[:count]:
         handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
@@ -130,10 +136,39 @@ def _running_executables_windows() -> list[Path]:
         try:
             size = wintypes.DWORD(len(buffer))
             if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
-                paths.append(Path(buffer.value))
+                processes.append((int(pid), Path(buffer.value)))
         finally:
             kernel32.CloseHandle(handle)
-    return paths
+    return processes
+
+
+def game_process_ids(install: GameInstall, processes: list[tuple[int, Path]] | None = None) -> list[int]:
+    candidates = running_processes() if processes is None else processes
+    return [pid for pid, path in candidates if _same_path(path, install.executable_path)]
+
+
+def stop_game(install: GameInstall, processes: list[tuple[int, Path]] | None = None) -> bool:
+    """Terminate the running game processes of this installation. True if any were signalled."""
+    stopped = False
+    for pid in game_process_ids(install, processes):
+        try:
+            if sys.platform == "win32":
+                import ctypes
+
+                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+                handle = kernel32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
+                if not handle:
+                    continue
+                try:
+                    stopped = bool(kernel32.TerminateProcess(handle, 1)) or stopped
+                finally:
+                    kernel32.CloseHandle(handle)
+            else:
+                os.kill(pid, signal.SIGTERM)
+                stopped = True
+        except OSError:
+            continue
+    return stopped
 
 
 def is_game_running(install: GameInstall, executables: list[Path] | None = None) -> bool:

@@ -674,6 +674,11 @@ class ConflictDialog(QDialog):
         )
         self.summary_label = label("", "secondary", self, wrap=True)
         layout.addWidget(self.summary_label)
+        self.filter_edit = QLineEdit(self)
+        self.filter_edit.setPlaceholderText(tr("ConflictSearchPlaceholder"))
+        self.filter_edit.setClearButtonEnabled(True)
+        self.filter_edit.textChanged.connect(self._apply_filter)
+        layout.addWidget(self.filter_edit)
         card = Card(self)
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(1, 1, 1, 1)
@@ -708,6 +713,7 @@ class ConflictDialog(QDialog):
             item = QTreeWidgetItem([group.file_path, ", ".join(names)])
             item.setIcon(0, warning_icon)
             item.setData(0, Qt.ItemDataRole.UserRole, group.mod_ids[-1] if group.mod_ids else "")
+            item.setData(0, Qt.ItemDataRole.UserRole + 1, list(group.mod_ids))
             for position, mod_id in enumerate(group.mod_ids):
                 text = self._mod_names.get(mod_id, mod_id)
                 mod = self._mods.get(mod_id)
@@ -722,7 +728,18 @@ class ConflictDialog(QDialog):
                 item.addChild(child)
             item.setExpanded(True)
             self.tree.addTopLevelItem(item)
+        self._apply_filter()
         self._update_action_bar()
+
+    def _apply_filter(self) -> None:
+        needle = self.filter_edit.text().strip().casefold()
+        for row in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(row)
+            if item is None:
+                continue
+            children = [item.child(i) for i in range(item.childCount())]
+            texts = [item.text(0)] + [child.text(1) for child in children if child is not None]
+            item.setHidden(bool(needle) and not any(needle in text.casefold() for text in texts))
 
     # ------------------------------------------------------------------ actions
     def _build_action_bar(self, layout: QVBoxLayout) -> None:
@@ -733,11 +750,13 @@ class ConflictDialog(QDialog):
         self.selected_label = label(tr("ConflictSelectMod"), "secondary", self.action_bar, wrap=True)
         bar.addWidget(self.selected_label, 1)
         self.disable_button = secondary_button(tr("ConflictActionDisable"), "dismiss")
+        self.losers_button = secondary_button(tr("ConflictActionDisableLosers"), "dismiss")
         self.win_button = secondary_button(tr("ConflictActionWin"), "down")
         self.folder_button = secondary_button(tr("ToolTipOpenFolder"), "folder")
         self.ignore_button = secondary_button(tr("ConflictActionIgnore"), "warning")
         for button, action in (
             (self.disable_button, "disable"),
+            (self.losers_button, "disable_losers"),
             (self.win_button, "win"),
             (self.folder_button, "folder"),
             (self.ignore_button, "ignore"),
@@ -747,17 +766,18 @@ class ConflictDialog(QDialog):
         self.action_bar.setVisible(self._actions is not None)
         layout.addWidget(self.action_bar)
 
-    def _selected(self) -> tuple[str, str] | None:
-        """(mod_id, winner_id) of the current tree item; mod_id is empty for a file row."""
+    def _selected(self) -> tuple[str, str, list[str]] | None:
+        """(mod_id, winner_id, group mod ids); mod_id is empty for a file row."""
         item = self.tree.currentItem()
         if item is None:
             return None
         value = item.data(0, Qt.ItemDataRole.UserRole)
         parent = item.parent()
-        if parent is not None:
-            winner = parent.data(0, Qt.ItemDataRole.UserRole)
-            return str(value or ""), str(winner or "")
-        return "", str(value or "")
+        group_item = parent if parent is not None else item
+        winner = group_item.data(0, Qt.ItemDataRole.UserRole)
+        group_ids = group_item.data(0, Qt.ItemDataRole.UserRole + 1) or []
+        mod_id = str(value or "") if parent is not None else ""
+        return mod_id, str(winner or ""), [str(v) for v in group_ids]
 
     def _update_action_bar(self) -> None:
         if self._actions is None:
@@ -768,6 +788,14 @@ class ConflictDialog(QDialog):
             tr("ConflictSelectedMod", mod.name) if mod is not None else tr("ConflictSelectMod")
         )
         self.disable_button.setEnabled(mod is not None and mod.is_enabled and not mod.is_workshop_mod)
+        losers = []
+        if selected is not None:
+            losers = [
+                self._mods[mid]
+                for mid in selected[2][:-1]
+                if mid in self._mods and self._mods[mid].is_enabled and not self._mods[mid].is_workshop_mod
+            ]
+        self.losers_button.setEnabled(bool(losers))
         self.win_button.setEnabled(
             mod is not None and not mod.is_workshop_mod and selected is not None and mod.id != selected[1]
         )
@@ -778,9 +806,12 @@ class ConflictDialog(QDialog):
         if self._actions is None:
             return
         selected = self._selected()
-        if selected is None or not selected[0]:
+        if selected is None:
             return
-        conflicts, mods = self._actions.apply(action, selected[0])
+        identifier = selected[1] if action == "disable_losers" else selected[0]
+        if not identifier:
+            return
+        conflicts, mods = self._actions.apply(action, identifier)
         self._conflicts = list(conflicts)
         self._mods = {m.id: m for m in mods}
         self._mod_names.update({m.id: m.name for m in mods})
