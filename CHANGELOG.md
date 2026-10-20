@@ -9,6 +9,8 @@ headings, links or formatting, matching the existing changelog on the mod pages.
 
 ## [Unreleased]
 
+## [5.3.0]
+
 - The manager now updates itself: new versions are downloaded, verified and installed automatically (portable, installer and AppImage)
 - The Start Game button now shows when the game is already running and cannot be clicked again
 - Fixed a crash (KeyError) when opening the conflict view with no conflicts; the Conflicts button is now disabled when there are none
