@@ -9,6 +9,11 @@ headings, links or formatting, matching the existing changelog on the mod pages.
 
 ## [Unreleased]
 
+- The manager now updates itself: new versions are downloaded, verified and installed automatically (portable, installer and AppImage)
+- The Start Game button now shows when the game is already running and cannot be clicked again
+- Fixed a crash (KeyError) when opening the conflict view with no conflicts; the Conflicts button is now disabled when there are none
+- Conflicts can now be resolved in the conflict window: disable a mod, make it load last so it wins, open its folder or ignore it
+
 ## [5.2.0]
 
 - New compact view: one slim line per mod with the category next to the version, switchable above the mod list or in the settings

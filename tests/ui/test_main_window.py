@@ -342,3 +342,54 @@ def test_endorse_prompt_without_login_opens_the_mod_page_once(
 def test_start_counts_launches(window: MainWindow) -> None:
     saved = window.ctx.session.settings_store.load()
     assert saved.launch_count == 1 and saved.first_launch_date
+
+
+def test_empty_conflict_dialog_does_not_crash(window: MainWindow) -> None:
+    from kcd_mod_manager.ui.dialogs import ConflictDialog
+
+    dialog = ConflictDialog(window, [], {}, set())
+    assert dialog.summary_label.text() == tr("ConflictCheckerEmpty")
+    dialog.close()
+
+
+def test_conflict_button_disabled_without_conflicts(window: MainWindow) -> None:
+    assert window.conflicts_button.isEnabled()
+    window.session.conflicts = []
+    window.refresh_view()
+    assert not window.conflicts_button.isEnabled()
+    assert window.conflicts_button.toolTip() == tr("ConflictCheckerEmpty")
+
+
+def test_conflict_dialog_can_disable_a_mod(window: MainWindow) -> None:
+    from kcd_mod_manager.ui.dialogs import ConflictActions, ConflictDialog
+
+    dialog = ConflictDialog(
+        window,
+        list(window.session.conflicts),
+        {m.id: m.name for m in window.session.mods},
+        set(),
+        actions=ConflictActions(window._conflict_action),
+        mods=list(window.session.mods),
+    )
+    group = dialog.tree.topLevelItem(0)
+    assert group is not None and group.childCount() == 2
+    winner = group.child(1)
+    loser = group.child(0)
+    assert winner is not None and loser is not None
+    assert tr("ConflictWinner") in winner.text(1)
+    dialog.tree.setCurrentItem(loser)
+    assert dialog.disable_button.isEnabled()
+    dialog.disable_button.click()
+    assert not window.session.mods[0].is_enabled
+    assert dialog.tree.topLevelItemCount() == 0
+    dialog.close()
+
+
+def test_start_button_reflects_a_running_game(window: MainWindow, monkeypatch: pytest.MonkeyPatch) -> None:
+    from kcd_mod_manager.ui import main_window
+
+    monkeypatch.setattr(main_window, "is_game_running", lambda _install: True)
+    window._refresh_game_running()
+    assert window._game_running
+    assert not window.start_button.isEnabled()
+    assert window.start_button.text() == tr("ButtonGameRunning")

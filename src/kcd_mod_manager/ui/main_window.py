@@ -61,13 +61,21 @@ from kcd_mod_manager.infrastructure.nexus import (
     mod_page_url,
 )
 from kcd_mod_manager.infrastructure.nexus_sso import SsoCancelled
-from kcd_mod_manager.infrastructure.platform_actions import LaunchError, launch_game, open_path, open_url
+from kcd_mod_manager.infrastructure.platform_actions import (
+    LaunchError,
+    is_game_running,
+    launch_game,
+    open_path,
+    open_url,
+)
+from kcd_mod_manager.infrastructure.self_update import InstallKind, detect_install_kind, prepare_update
 from kcd_mod_manager.resources import resource_path
 from kcd_mod_manager.ui import dialogs, icons
 from kcd_mod_manager.ui.dialogs import (
     AssignCategoryDialog,
     BusyDialog,
     CategoryManagerDialog,
+    ConflictActions,
     ConflictDialog,
     GameSelectionDialog,
 )
@@ -123,6 +131,10 @@ class MainWindow(QMainWindow):
         self._install_queue: list[tuple[Path, int, bool]] = []
         self._cover_game: GameType | None = None
         self._app_update_offered = False
+        self._game_running = False
+        self._game_timer = QTimer(self)
+        self._game_timer.setInterval(2000)
+        self._game_timer.timeout.connect(self._refresh_game_running)
 
         self.setWindowTitle(f"KCD Mod Manager {__version__}")
         icon = resource_path("images", "logo.ico")
@@ -645,6 +657,7 @@ class MainWindow(QMainWindow):
             count = len(self.session.conflicts)
             self.conflict_badge.setText(str(count))
             self.conflict_badge.setVisible(count > 0)
+            self._refresh_conflict_button()
             self.category_row.setVisible(bool(self.session.categories))
         finally:
             self._updating = False
@@ -702,6 +715,8 @@ class MainWindow(QMainWindow):
             dialogs.info(self, tr("NoGameSelectedMessage"))
             return False
         self.load_game(game)
+        self._refresh_game_running()
+        self._game_timer.start()
         record_launch(self.settings, date.today())
         self.session.save_settings()
         if self.ctx.imported_legacy:
@@ -1154,10 +1169,28 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, lambda: self.install_paths(paths))
 
     # ================================================================== game launch
+    def _refresh_game_running(self) -> None:
+        install = self.session.install
+        running = False
+        if install is not None:
+            try:
+                running = is_game_running(install)
+            except Exception as exc:  # process enumeration must never break the UI
+                log.debug("Game process check failed: %s", exc)
+        self._game_running = running
+        self.start_button.setEnabled(install is not None and not running)
+        self.start_button.setText(tr("ButtonGameRunning") if running else tr("ButtonStartGame"))
+        self.start_button.setToolTip(tr("GameRunningTooltip") if running else "")
+
     def start_game(self) -> None:
         install = self.session.install
         if install is None:
             dialogs.error(self, tr("ErrorGameInstallationNotFound"))
+            return
+        self._refresh_game_running()
+        if self._game_running:
+            self.status(tr("ButtonGameRunning"))
+            dialogs.info(self, tr("GameAlreadyRunning"))
             return
         if not self._guard(self.session.save_mod_order):
             return
@@ -1169,6 +1202,7 @@ class MainWindow(QMainWindow):
             dialogs.error(self, tr("FailedToStartGame", exc))
             return
         self.status(tr("StatusGameStarted"))
+        QTimer.singleShot(600, self._refresh_game_running)
         if not result.arguments_applied:
             dialogs.info(self, tr("SteamUrlNoArgs"))
 
@@ -1180,7 +1214,7 @@ class MainWindow(QMainWindow):
         self._scan_cancel = cancel
         self.scan_progress.setValue(0)
         self.scan_row.show()
-        self.conflicts_button.setEnabled(False)
+        self._refresh_conflict_button()
 
         def work(progress: Callable[[object], None]) -> list[ConflictGroup]:
             return self.session.scan_conflicts(lambda value: progress(value), cancel)
@@ -1188,14 +1222,16 @@ class MainWindow(QMainWindow):
         def finish() -> None:
             self._scan_cancel = None
             self.scan_row.hide()
-            self.conflicts_button.setEnabled(True)
+            self._refresh_conflict_button()
 
         def done(conflicts: list[ConflictGroup]) -> None:
             finish()
             self.refresh_view()
             if conflicts:
                 self.status(tr("ConflictsDetected", len(conflicts)))
-            if then_show:
+            elif then_show:
+                self.status(tr("ConflictCheckerEmpty"))
+            if then_show and conflicts:
                 self._show_conflict_dialog()
 
         def failed(exc: BaseException) -> None:
@@ -1213,13 +1249,55 @@ class MainWindow(QMainWindow):
         if self._scan_cancel is not None:
             self._scan_cancel.set()
 
+    def _refresh_conflict_button(self) -> None:
+        count = len(self.session.conflicts)
+        scanning = self._scan_cancel is not None
+        self.conflicts_button.setEnabled(count > 0 and not scanning)
+        self.conflicts_button.setToolTip(
+            tr("ConflictsDetected", count) if count else tr("ConflictCheckerEmpty")
+        )
+
     def show_conflicts(self) -> None:
+        if not self.session.conflicts:
+            self.status(tr("ConflictCheckerEmpty"))
+            return
         self.scan_conflicts(then_show=True)
+
+    def _conflict_action(self, action: str, mod_id: str) -> tuple[list[ConflictGroup], list[Mod]]:
+        mod = next((m for m in self.session.mods if m.id == mod_id), None)
+        if mod is None:
+            return list(self.session.conflicts), list(self.session.mods)
+        if action == "disable":
+            self._guard(lambda: self.session.set_enabled(mod, False))
+        elif action == "win":
+            self._guard(lambda: self.session.move(mod, list(self.session.mods), len(self.session.mods) - 1))
+        elif action == "ignore":
+            self._guard(lambda: self.session.set_ignored_in_conflicts(mod, True))
+        elif action == "folder" and mod.path is not None:
+            self._open(mod.path)
+        self.refresh_view()
+        if action == "folder":
+            return list(self.session.conflicts), list(self.session.mods)
+        try:
+            conflicts = self.session.scan_conflicts()
+        except Exception as exc:
+            log.debug("Conflict rescan failed: %s", exc)
+            return list(self.session.conflicts), list(self.session.mods)
+        self.refresh_view()
+        return conflicts, list(self.session.mods)
 
     def _show_conflict_dialog(self) -> None:
         names = {m.id: m.name for m in self.session.mods}
         workshop = {m.id for m in self.session.mods if m.is_workshop_mod}
-        ConflictDialog(self, self.session.conflicts, names, workshop).exec()
+        ConflictDialog(
+            self,
+            self.session.conflicts,
+            names,
+            workshop,
+            actions=ConflictActions(self._conflict_action),
+            mods=list(self.session.mods),
+        ).exec()
+        self.refresh_view()
 
     # ================================================================== Nexus
     def _startup_online_checks(self) -> None:
@@ -1240,8 +1318,47 @@ class MainWindow(QMainWindow):
         if update is None:
             return
         self._app_update_offered = True
+        kind = detect_install_kind()
+        if kind.supported:
+            if dialogs.confirm(
+                self, tr("SelfUpdateAvailable", update.latest_version), tr("UpdateAvailableTitle")
+            ):
+                self._start_self_update(update.latest_version, kind)
+            return
         if dialogs.confirm(self, tr("AppUpdateAvailable", update.latest_version)):
             self._open_url(manager_page(self.session.game))
+
+    def _start_self_update(self, version: str, kind: InstallKind) -> None:
+        self.status_progress.setValue(0)
+        self.status_progress.show()
+        self.status(tr("SelfUpdateDownloading", version))
+
+        def progress(value: object) -> None:
+            self.status_progress.setValue(int(value))  # type: ignore[arg-type]
+
+        def done(apply_update: object) -> None:
+            self.status_progress.hide()
+            self.status(tr("SelfUpdateInstalling"))
+            try:
+                apply_update()  # type: ignore[operator]
+            except Exception as exc:
+                dialogs.error(self, tr("SelfUpdateFailed", exc))
+                return
+            self.close()
+            QApplication.quit()
+
+        def failed(exc: BaseException) -> None:
+            self.status_progress.hide()
+            self.status(tr("UpdateInstallFailed"))
+            dialogs.error(self, tr("SelfUpdateFailed", exc))
+
+        self.tasks.run(
+            lambda report: prepare_update(version, kind, lambda value: report(value)),
+            done,
+            failed,
+            progress,
+            serial=False,
+        )
 
     def maybe_ask_for_endorsement(self) -> None:
         """Ask once, after regular use, whether the user wants to endorse the manager."""

@@ -11,6 +11,7 @@ Launching:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shlex
@@ -79,7 +80,71 @@ def build_arguments(launch_args: str, dev_mode: bool) -> list[str]:
     return args
 
 
+def _same_path(a: Path, b: Path) -> bool:
+    try:
+        return os.path.normcase(str(a.resolve())) == os.path.normcase(str(b.resolve()))
+    except OSError:
+        return os.path.normcase(str(a)) == os.path.normcase(str(b))
+
+
+def running_executables() -> list[Path]:
+    """Executable paths of running processes (best effort, no third-party dependency)."""
+    paths: list[Path] = []
+    if sys.platform == "win32":
+        paths.extend(_running_executables_windows())
+    elif sys.platform.startswith("linux"):
+        proc = Path("/proc")
+        if proc.is_dir():
+            for entry in proc.iterdir():
+                if not entry.name.isdigit():
+                    continue
+                with contextlib.suppress(OSError):
+                    paths.append((entry / "exe").readlink())
+                try:  # Proton: the exe appears in the command line, not as /proc exe
+                    for token in (entry / "cmdline").read_bytes().split(b"\0"):
+                        text = token.decode("utf-8", "ignore")
+                        if text.lower().endswith(".exe"):
+                            paths.append(Path(text))
+                except OSError:
+                    continue
+    return paths
+
+
+def _running_executables_windows() -> list[Path]:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)  # type: ignore[attr-defined]
+    process_ids = (wintypes.DWORD * 4096)()
+    needed = wintypes.DWORD()
+    if not psapi.EnumProcesses(process_ids, ctypes.sizeof(process_ids), ctypes.byref(needed)):
+        return []
+    count = needed.value // ctypes.sizeof(wintypes.DWORD)
+    paths: list[Path] = []
+    buffer = ctypes.create_unicode_buffer(32768)
+    for pid in process_ids[:count]:
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            continue
+        try:
+            size = wintypes.DWORD(len(buffer))
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                paths.append(Path(buffer.value))
+        finally:
+            kernel32.CloseHandle(handle)
+    return paths
+
+
+def is_game_running(install: GameInstall, executables: list[Path] | None = None) -> bool:
+    """True if a process runs exactly this installation's executable."""
+    candidates = running_executables() if executables is None else executables
+    return any(_same_path(path, install.executable_path) for path in candidates)
+
+
 def launch_game(install: GameInstall, launch_args: str, dev_mode: bool) -> LaunchResult:
+    if is_game_running(install):
+        raise LaunchError("The game is already running.")
     exe = install.executable_path
     if exe.suffix.lower() != ".exe":
         raise LaunchError("Only .exe files can be executed.")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
@@ -32,7 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from kcd_mod_manager.domain import categories as cat
-from kcd_mod_manager.domain.models import ConflictGroup, GameInstall, GameType, ModCategory
+from kcd_mod_manager.domain.models import ConflictGroup, GameInstall, GameType, Mod, ModCategory
 from kcd_mod_manager.i18n import tr
 from kcd_mod_manager.resources import resource_path
 from kcd_mod_manager.ui import icons
@@ -115,6 +116,7 @@ KIND_ICONS = {
     "warning": ("warning_filled", "warning"),
     "error": ("error_filled", "error"),
     "question": ("question_filled", "accent_text"),
+    "success": ("success_filled", "success"),
 }
 
 
@@ -638,6 +640,14 @@ class CategoryManagerDialog(QDialog):
 
 # --------------------------------------------------------------------------- conflicts
 
+ConflictApply = Callable[[str, str], tuple[Sequence[ConflictGroup], Sequence[Mod]]]
+"""(action, mod_id) -> refreshed (conflicts, mods) after the action was applied."""
+
+
+@dataclass(frozen=True, slots=True)
+class ConflictActions:
+    apply: ConflictApply
+
 
 class ConflictDialog(QDialog):
     def __init__(
@@ -646,45 +656,136 @@ class ConflictDialog(QDialog):
         conflicts: Sequence[ConflictGroup],
         mod_names: dict[str, str],
         workshop_ids: set[str],
+        actions: ConflictActions | None = None,
+        mods: Sequence[Mod] = (),
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("ConflictCheckerTitle"))
         self.resize(860, 560)
+        self._conflicts = list(conflicts)
+        self._mod_names = dict(mod_names)
+        self._workshop_ids = set(workshop_ids)
+        self._actions = actions
+        self._mods: dict[str, Mod] = {m.id: m for m in mods}
         layout, footer = _dialog_layout(
             self,
             tr("ConflictCheckerTitle"),
-            subtitle=tr("ConflictCheckerSubtitle", len(conflicts))
-            if conflicts
-            else tr("ConflictCheckerEmpty"),
             kind="warning" if conflicts else "success",
         )
+        self.summary_label = label("", "secondary", self, wrap=True)
+        layout.addWidget(self.summary_label)
         card = Card(self)
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(1, 1, 1, 1)
-        tree = QTreeWidget(card)
-        tree.setObjectName("conflictTree")
-        tree.setHeaderLabels([tr("ConflictFileHeader"), tr("ConflictModsHeader")])
-        tree.setColumnWidth(0, 440)
-        tree.setAlternatingRowColors(True)
-        tree.setRootIsDecorated(True)
-        tree.setUniformRowHeights(True)
-        warning_icon = icons.icon("warning_filled", current_palette().warning)
-        for group in conflicts:
-            names = [mod_names.get(i, i) for i in group.mod_ids]
-            item = QTreeWidgetItem([group.file_path, ", ".join(names)])
-            item.setIcon(0, warning_icon)
-            for mod_id in group.mod_ids:
-                text = mod_names.get(mod_id, mod_id)
-                if mod_id in workshop_ids:
-                    text += f"  [{tr('WorkshopBadgeText')}] {tr('WorkshopConflictNote')}"
-                item.addChild(QTreeWidgetItem(["", text]))
-            tree.addTopLevelItem(item)
-        tree.setIconSize(QSize(14, 14))
-        card_layout.addWidget(tree)
+        self.tree = QTreeWidget(card)
+        self.tree.setObjectName("conflictTree")
+        self.tree.setHeaderLabels([tr("ConflictFileHeader"), tr("ConflictModsHeader")])
+        self.tree.setColumnWidth(0, 440)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setRootIsDecorated(True)
+        self.tree.setUniformRowHeights(True)
+        self.tree.setIconSize(QSize(14, 14))
+        card_layout.addWidget(self.tree)
         layout.addWidget(card, 1)
+        self._build_action_bar(layout)
+        self.tree.currentItemChanged.connect(lambda *_: self._update_action_bar())
+        self._rebuild()
         close = _dialog_button(tr("SettingsClose"), primary=True)
         close.clicked.connect(self.reject)
         _add_buttons(footer, close)
+
+    # ------------------------------------------------------------------ content
+    def _rebuild(self) -> None:
+        self.summary_label.setText(
+            tr("ConflictCheckerSubtitle", len(self._conflicts))
+            if self._conflicts
+            else tr("ConflictCheckerEmpty")
+        )
+        self.tree.clear()
+        warning_icon = icons.icon("warning_filled", current_palette().warning)
+        for group in self._conflicts:
+            names = [self._mod_names.get(i, i) for i in group.mod_ids]
+            item = QTreeWidgetItem([group.file_path, ", ".join(names)])
+            item.setIcon(0, warning_icon)
+            item.setData(0, Qt.ItemDataRole.UserRole, group.mod_ids[-1] if group.mod_ids else "")
+            for position, mod_id in enumerate(group.mod_ids):
+                text = self._mod_names.get(mod_id, mod_id)
+                mod = self._mods.get(mod_id)
+                if position == len(group.mod_ids) - 1:
+                    text += f"  · {tr('ConflictWinner')}"
+                if mod is not None and not mod.is_enabled:
+                    text += f"  [{tr('ConflictModDisabled')}]"
+                if mod_id in self._workshop_ids:
+                    text += f"  [{tr('WorkshopBadgeText')}] {tr('WorkshopConflictNote')}"
+                child = QTreeWidgetItem(["", text])
+                child.setData(0, Qt.ItemDataRole.UserRole, mod_id)
+                item.addChild(child)
+            item.setExpanded(True)
+            self.tree.addTopLevelItem(item)
+        self._update_action_bar()
+
+    # ------------------------------------------------------------------ actions
+    def _build_action_bar(self, layout: QVBoxLayout) -> None:
+        self.action_bar = QWidget(self)
+        bar = QHBoxLayout(self.action_bar)
+        bar.setContentsMargins(0, 0, 0, 0)
+        bar.setSpacing(8)
+        self.selected_label = label(tr("ConflictSelectMod"), "secondary", self.action_bar, wrap=True)
+        bar.addWidget(self.selected_label, 1)
+        self.disable_button = secondary_button(tr("ConflictActionDisable"), "dismiss")
+        self.win_button = secondary_button(tr("ConflictActionWin"), "down")
+        self.folder_button = secondary_button(tr("ToolTipOpenFolder"), "folder")
+        self.ignore_button = secondary_button(tr("ConflictActionIgnore"), "warning")
+        for button, action in (
+            (self.disable_button, "disable"),
+            (self.win_button, "win"),
+            (self.folder_button, "folder"),
+            (self.ignore_button, "ignore"),
+        ):
+            button.clicked.connect(lambda _=False, a=action: self._apply(a))
+            bar.addWidget(button)
+        self.action_bar.setVisible(self._actions is not None)
+        layout.addWidget(self.action_bar)
+
+    def _selected(self) -> tuple[str, str] | None:
+        """(mod_id, winner_id) of the current tree item; mod_id is empty for a file row."""
+        item = self.tree.currentItem()
+        if item is None:
+            return None
+        value = item.data(0, Qt.ItemDataRole.UserRole)
+        parent = item.parent()
+        if parent is not None:
+            winner = parent.data(0, Qt.ItemDataRole.UserRole)
+            return str(value or ""), str(winner or "")
+        return "", str(value or "")
+
+    def _update_action_bar(self) -> None:
+        if self._actions is None:
+            return
+        selected = self._selected()
+        mod = self._mods.get(selected[0]) if selected and selected[0] else None
+        self.selected_label.setText(
+            tr("ConflictSelectedMod", mod.name) if mod is not None else tr("ConflictSelectMod")
+        )
+        self.disable_button.setEnabled(mod is not None and mod.is_enabled and not mod.is_workshop_mod)
+        self.win_button.setEnabled(
+            mod is not None and not mod.is_workshop_mod and selected is not None and mod.id != selected[1]
+        )
+        self.folder_button.setEnabled(mod is not None and mod.path is not None)
+        self.ignore_button.setEnabled(mod is not None and not mod.ignored_in_conflict_detector)
+
+    def _apply(self, action: str) -> None:
+        if self._actions is None:
+            return
+        selected = self._selected()
+        if selected is None or not selected[0]:
+            return
+        conflicts, mods = self._actions.apply(action, selected[0])
+        self._conflicts = list(conflicts)
+        self._mods = {m.id: m for m in mods}
+        self._mod_names.update({m.id: m.name for m in mods})
+        self._workshop_ids = {m.id for m in mods if m.is_workshop_mod}
+        self._rebuild()
 
 
 # --------------------------------------------------------------------------- progress

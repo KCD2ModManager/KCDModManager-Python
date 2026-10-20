@@ -23,6 +23,10 @@ in Python + PySide6 and works with the same data (profiles, categories, notes, l
 - Nexus Mods: SSO login, update checks, premium one-click updates, endorse, open mod page.
 - Steam Workshop mods are listed and can be ordered, but their files are never modified.
 - Mods backups (on startup or on demand, with automatic pruning), and a game manifest `gameVersion` updater.
+- Self-updating: new manager versions are downloaded, checksum-verified and installed on request
+  (Windows installer and portable, Linux AppImage and tarball; source runs open the download page instead).
+- The conflict window can resolve conflicts (disable a mod, make it load last, open its folder, ignore it),
+  and the Start Game button is disabled while the game is running.
 - Light/dark theme; English, German, French and Simplified Chinese. The first start picks the
   system language when it is supported.
 
