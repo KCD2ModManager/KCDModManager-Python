@@ -24,10 +24,10 @@ from kcd_mod_manager.domain import manifest as manifest_text
 from kcd_mod_manager.domain.manifest import MANIFEST_FILE_NAME
 from kcd_mod_manager.domain.mod_order import apply_order_entries
 from kcd_mod_manager.domain.models import GameInstall, ManifestInfo, Mod, ModVersionInfo
-from kcd_mod_manager.domain.naming import generate_mod_id, safe_file_name
+from kcd_mod_manager.domain.naming import generate_mod_id, safe_file_name, sanitize_folder_name
 from kcd_mod_manager.domain.versioning import is_game_version_compatible, is_not_newer
 from kcd_mod_manager.infrastructure import manifest_files as mf
-from kcd_mod_manager.infrastructure.archives import ArchiveError, extract_archive
+from kcd_mod_manager.infrastructure.archives import ArchiveError, extract_archive, is_supported_archive
 from kcd_mod_manager.infrastructure.categories_store import ModSidecar
 from kcd_mod_manager.infrastructure.fs import (
     copy_tree,
@@ -175,7 +175,9 @@ class ModLibrary:
             return None
         path = directory
         if renaming and directory.name != info.mod_id and safe_file_name(info.mod_id) == info.mod_id:
-            path = self._rename_to_mod_id(directory, mods_dir / info.mod_id)
+            path = self._rename_folder(directory, mods_dir / info.mod_id)
+        else:
+            path = self._sanitize_spaces(path, mods_dir)
         return Mod(
             id=info.mod_id,
             name=info.name,
@@ -186,7 +188,7 @@ class ModLibrary:
         )
 
     @staticmethod
-    def _rename_to_mod_id(directory: Path, expected: Path) -> Path:
+    def _rename_folder(directory: Path, expected: Path) -> Path:
         if expected.exists() and not same_path(expected, directory):
             log.warning("Not renaming %s: %s already exists", directory.name, expected.name)
             return directory
@@ -196,6 +198,14 @@ class ModLibrary:
         except OSError as exc:
             log.error("Renaming %s to %s failed: %s", directory, expected, exc)
             return directory
+
+    @classmethod
+    def _sanitize_spaces(cls, directory: Path, mods_dir: Path) -> Path:
+        """Rename folders that contain spaces so the game can load them via ``mod_order.txt``."""
+        clean = sanitize_folder_name(directory.name)
+        if clean == directory.name:
+            return directory
+        return cls._rename_folder(directory, mods_dir / clean)
 
     @staticmethod
     def _workshop_mod(directory: Path, info: ManifestInfo, renaming: bool) -> Mod:
@@ -256,7 +266,7 @@ class ModLibrary:
             except ArchiveError as exc:
                 return InstallResult(InstallStatus.FAILED, message=str(exc))
 
-            manifest = find_first(staging, MANIFEST_FILE_NAME)
+            manifest = self._find_manifest_maybe_unwrap(staging)
             if manifest is None:
                 if not has_file_with_suffix(staging, ".pak"):
                     return InstallResult(
@@ -279,11 +289,11 @@ class ModLibrary:
 
             source = manifest.parent
             if renaming:
-                target = mods_dir / safe_file_name(info.mod_id)
+                target = mods_dir / sanitize_folder_name(safe_file_name(info.mod_id))
             elif not same_path(source, staging):
-                target = mods_dir / source.name
+                target = mods_dir / sanitize_folder_name(source.name)
             else:
-                target = mods_dir / staging.name
+                target = mods_dir / sanitize_folder_name(staging.name)
 
             if target.exists():
                 existing_manifest = mf.find_manifest(target)
@@ -347,7 +357,12 @@ class ModLibrary:
                 mod_id = workshop_mod_id(info, folder.name, renaming)
                 mf.ensure_manifest_mod_id(manifest, mod_id)
 
-            target_name = folder.name if workshop or not renaming else safe_file_name(mod_id)
+            if workshop:
+                target_name = folder.name
+            elif renaming:
+                target_name = sanitize_folder_name(safe_file_name(mod_id))
+            else:
+                target_name = sanitize_folder_name(folder.name)
             target = mods_dir / target_name
             if same_path(target, folder) or folder in target.parents:
                 return InstallResult(
@@ -382,7 +397,7 @@ class ModLibrary:
         staging = _staging_dir(mod.path.name)
         try:
             extract_archive(archive, staging)
-            manifest = find_first(staging, MANIFEST_FILE_NAME)
+            manifest = self._find_manifest_maybe_unwrap(staging)
             if manifest is None:
                 manifest = mf.generate_manifest_file(staging, renaming_enabled=renaming)
             info = mf.parse_manifest_file(manifest, renaming_enabled=renaming, allow_write_mod_id=renaming)
@@ -392,6 +407,24 @@ class ModLibrary:
             return info
         finally:
             _cleanup_staging(staging)
+
+    @staticmethod
+    def _find_manifest_maybe_unwrap(staging: Path) -> Path | None:
+        """Find ``mod.manifest``, unwrapping one nested archive level if needed."""
+        manifest = find_first(staging, MANIFEST_FILE_NAME)
+        if manifest is not None:
+            return manifest
+        nested = [p for p in staging.rglob("*") if p.is_file() and is_supported_archive(p)]
+        if len(nested) != 1:
+            return None
+        inner = staging / "_nested_unwrap"
+        inner.mkdir(exist_ok=True)
+        try:
+            extract_archive(nested[0], inner)
+        except ArchiveError as exc:
+            log.warning("Nested archive unwrap failed for %s: %s", nested[0].name, exc)
+            return None
+        return find_first(inner, MANIFEST_FILE_NAME)
 
     # ------------------------------------------------------------------ removal & backup
     @staticmethod

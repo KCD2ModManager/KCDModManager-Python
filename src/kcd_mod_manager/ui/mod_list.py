@@ -267,6 +267,8 @@ class ModDelegate(QStyledItemDelegate):
         self.button_enabled: ButtonPredicate = lambda _mod, _name: True
         self._pressed: tuple[int, str] | None = None
         self.compact = False
+        self.conflict_winners: set[str] = set()
+        self.conflict_participants: set[str] = set()
 
     def set_theme(self, palette: Palette, dark: bool) -> None:
         self.palette, self.dark = palette, dark
@@ -343,6 +345,26 @@ class ModDelegate(QStyledItemDelegate):
             painter.setClipPath(bar)
             painter.fillRect(
                 QRectF(card.left(), card.top(), SELECTION_BAR, card.height()), QColor(p.accent_text)
+            )
+            painter.restore()
+        elif mod.id in self.conflict_winners:
+            bar = QPainterPath()
+            bar.addRoundedRect(card, 4, 4)
+            painter.save()
+            painter.setClipPath(bar)
+            painter.fillRect(
+                QRectF(card.right() - SELECTION_BAR, card.top(), SELECTION_BAR, card.height()),
+                QColor(p.success),
+            )
+            painter.restore()
+        elif mod.id in self.conflict_participants:
+            bar = QPainterPath()
+            bar.addRoundedRect(card, 4, 4)
+            painter.save()
+            painter.setClipPath(bar)
+            painter.fillRect(
+                QRectF(card.right() - SELECTION_BAR, card.top(), SELECTION_BAR, card.height()),
+                QColor(p.warning),
             )
             painter.restore()
 

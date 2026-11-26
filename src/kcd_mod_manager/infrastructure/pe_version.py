@@ -9,8 +9,12 @@ from pathlib import Path
 _FIXED_FILE_INFO_SIGNATURE = struct.pack("<I", 0xFEEF04BD)
 
 
+def _format_version(ms: int, ls: int) -> str:
+    return f"{ms >> 16}.{ms & 0xFFFF}.{ls >> 16}.{ls & 0xFFFF}"
+
+
 def read_file_version(path: Path) -> str | None:
-    """Return ``major.minor.build.revision`` from the VS_FIXEDFILEINFO resource, if present."""
+    """Return ``major.minor.build.revision`` from the VS_FIXEDFILEINFO FileVersion, if present."""
     try:
         with path.open("rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
             index = data.rfind(_FIXED_FILE_INFO_SIGNATURE)
@@ -19,4 +23,17 @@ def read_file_version(path: Path) -> str | None:
             _sig, _struct_version, ms, ls = struct.unpack_from("<IIII", data, index)
     except (OSError, ValueError, struct.error):
         return None
-    return f"{ms >> 16}.{ms & 0xFFFF}.{ls >> 16}.{ls & 0xFFFF}"
+    return _format_version(ms, ls)
+
+
+def read_product_version(path: Path) -> str | None:
+    """Return ProductVersion from VS_FIXEDFILEINFO when present."""
+    try:
+        with path.open("rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+            index = data.rfind(_FIXED_FILE_INFO_SIGNATURE)
+            if index < 0 or index + 24 > len(data):
+                return None
+            _sig, _sv, _fms, _fls, pms, pls = struct.unpack_from("<IIIIII", data, index)
+    except (OSError, ValueError, struct.error):
+        return None
+    return _format_version(pms, pls)

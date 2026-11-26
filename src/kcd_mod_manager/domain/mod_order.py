@@ -1,7 +1,9 @@
 """The ``mod_order.txt`` format and load-order manipulation.
 
-Format (shared with the game and the original manager): one mod id per line in load order.
-Enabled mods are written as ``id``, disabled ones as ``# id``. Blank lines are ignored.
+Format (shared with the game and the original manager): one entry per line in load order.
+Enabled mods are written as the **mod folder name**, disabled ones as ``# folder``. Blank lines
+are ignored. Older files that listed ``<modid>`` instead of the folder name are still accepted
+when applying an order.
 """
 
 from __future__ import annotations
@@ -16,6 +18,13 @@ from kcd_mod_manager.domain.models import Mod
 class OrderEntry:
     mod_id: str
     enabled: bool
+
+
+def order_key(mod: Mod) -> str:
+    """Identity written to ``mod_order.txt``: on-disk folder name, else ``Mod.id``."""
+    if mod.path is not None:
+        return mod.path.name
+    return mod.id
 
 
 def parse_mod_order(lines: Iterable[str]) -> list[OrderEntry]:
@@ -34,7 +43,7 @@ def parse_mod_order(lines: Iterable[str]) -> list[OrderEntry]:
 def serialize_mod_order(mods: Iterable[Mod]) -> list[str]:
     """Lines for ``mod_order.txt``, ordered by ``Mod.number`` (stable for equal numbers)."""
     ordered = sorted(mods, key=lambda m: m.number)
-    return [m.id if m.is_enabled else f"# {m.id}" for m in ordered]
+    return [order_key(m) if m.is_enabled else f"# {order_key(m)}" for m in ordered]
 
 
 def renumber(mods: Sequence[Mod]) -> None:
@@ -43,25 +52,45 @@ def renumber(mods: Sequence[Mod]) -> None:
         mod.number = index
 
 
+def _match_entry(mods: Sequence[Mod], key: str, seen: set[int]) -> Mod | None:
+    """Resolve an order-file key to a mod: folder name first, then ``Mod.id`` (legacy)."""
+    for mod in mods:
+        if id(mod) in seen:
+            continue
+        if mod.path is not None and mod.path.name == key:
+            return mod
+    key_cf = key.casefold()
+    for mod in mods:
+        if id(mod) in seen:
+            continue
+        if mod.path is not None and mod.path.name.casefold() == key_cf:
+            return mod
+    for mod in mods:
+        if id(mod) in seen:
+            continue
+        if mod.id == key or mod.id.casefold() == key_cf:
+            return mod
+    return None
+
+
 def apply_order_entries(mods: list[Mod], entries: Sequence[OrderEntry]) -> list[Mod]:
     """Order mods by the entries of an order file and apply their enabled state.
 
     Listed mods come first (numbered from 1) in file order; unlisted mods keep their relative order,
     are appended with ``number = 0`` and enabled - matching the original loader.
     """
-    by_id = {m.id: m for m in mods}
     ordered: list[Mod] = []
-    seen: set[str] = set()
+    seen: set[int] = set()
     for index, entry in enumerate(entries, start=1):
-        mod = by_id.get(entry.mod_id)
-        if mod is None or entry.mod_id in seen:
+        mod = _match_entry(mods, entry.mod_id, seen)
+        if mod is None:
             continue
         mod.number = index
         mod.is_enabled = entry.enabled
         ordered.append(mod)
-        seen.add(entry.mod_id)
+        seen.add(id(mod))
     for mod in mods:
-        if mod.id not in seen:
+        if id(mod) not in seen:
             mod.number = 0
             mod.is_enabled = True
             ordered.append(mod)

@@ -17,6 +17,12 @@ class SortMode(StrEnum):
     CATEGORY = "Category"
 
 
+class QuickFilter(StrEnum):
+    ALL = "all"
+    CONFLICTS = "conflicts"
+    UPDATES = "updates"
+
+
 def next_sort_mode(current: SortMode, has_categories: bool) -> SortMode:
     if current is SortMode.LOAD_ORDER:
         return SortMode.TITLE
@@ -25,13 +31,24 @@ def next_sort_mode(current: SortMode, has_categories: bool) -> SortMode:
     return SortMode.LOAD_ORDER
 
 
-def matches(mod: Mod, search: str, category_filter: str | None) -> bool:
+def matches(
+    mod: Mod,
+    search: str,
+    category_filter: str | None,
+    *,
+    quick_filter: QuickFilter = QuickFilter.ALL,
+    conflict_ids: frozenset[str] | set[str] | None = None,
+) -> bool:
     if category_filter is not None:
         if category_filter == UNCATEGORIZED:
             if mod.category_id:
                 return False
         elif (mod.category_id or "").casefold() != category_filter.casefold():
             return False
+    if quick_filter is QuickFilter.CONFLICTS and mod.id not in (conflict_ids or ()):
+        return False
+    if quick_filter is QuickFilter.UPDATES and not mod.has_update:
+        return False
     term = search.strip().lower()
     if not term:
         return True
@@ -60,5 +77,16 @@ def visible_mods(
     category_filter: str | None,
     mode: SortMode,
     categories: Sequence[ModCategory],
+    *,
+    quick_filter: QuickFilter = QuickFilter.ALL,
+    conflict_ids: frozenset[str] | set[str] | None = None,
 ) -> list[Mod]:
-    return sort_mods((m for m in mods if matches(m, search, category_filter)), mode, categories)
+    return sort_mods(
+        (
+            m
+            for m in mods
+            if matches(m, search, category_filter, quick_filter=quick_filter, conflict_ids=conflict_ids)
+        ),
+        mode,
+        categories,
+    )

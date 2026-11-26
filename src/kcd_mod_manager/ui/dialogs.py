@@ -185,6 +185,19 @@ def confirm(parent: QWidget | None, message: str, title: str | None = None) -> b
     return dialog.clicked_index == 0
 
 
+def ask_unsaved_order(parent: QWidget | None, message: str) -> str | None:
+    """Returns ``\"apply\"``, ``\"discard\"``, or ``None`` (cancel)."""
+    dialog = MessageDialog(
+        parent,
+        "question",
+        tr("DialogTitleQuestion"),
+        message,
+        ("CloseUnsavedApply", "CloseUnsavedDiscard", "CancelButton"),
+    )
+    dialog.exec()
+    return {0: "apply", 1: "discard"}.get(dialog.clicked_index)
+
+
 class PromptDialog(QDialog):
     """Caption + single input + OK/Cancel (WPF NameInputDialog)."""
 

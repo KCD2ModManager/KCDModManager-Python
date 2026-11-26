@@ -124,6 +124,15 @@ class ManifestInfo:
     has_explicit_mod_id: bool = True
 
 
+class LaunchStore(StrEnum):
+    """How the installation should be started (Steam overlay / Epic EOS)."""
+
+    STEAM = "steam"
+    EPIC = "epic"
+    GOG = "gog"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True, slots=True)
 class GameInstall:
     game: GameType
@@ -132,6 +141,7 @@ class GameInstall:
     mods_path: Path
     """Mods live in <root>/Mods (not Bin/Mods)."""
     game_version: str | None = None
+    launch_store: LaunchStore = LaunchStore.UNKNOWN
 
     @property
     def bin_path(self) -> Path:

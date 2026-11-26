@@ -9,6 +9,29 @@ headings, links or formatting, matching the existing changelog on the mod pages.
 
 ## [Unreleased]
 
+## [5.5.0]
+
+- Sidebar game card: edge-to-edge key art with a compact floating Switch Game chip (no duplicate title)
+- Double-click a mod to open its folder; copy folder name/path from the context menu
+- Warn on close when load-order changes are still pending (Apply / Discard / Cancel)
+- Remember Store vs Direct launch separately per game (KCD1 / KCD2)
+- Quick filter for conflicts-only or updates-only; active profile badge; dark-mode toggle in the sidebar
+- System tray icon while the game runs; desktop notification when mod updates are found
+- Apply button pulses while changes are pending; install status shows queue progress (n/m)
+- Footer quick toggles for Dev mode and Store launch, plus launch presets (Vanilla / Dev / Dev+cfg)
+- Pending badge for unapplied load-order changes; Ctrl+S applies; optional order-file backup on Apply
+- Open Mods folder / mod_order.txt from the filter bar; conflict winners get a green edge mark
+- Confirm profile switches that would change enable/order; game-running pill in the footer
+- Setting to launch through Steam/Epic or run KingdomCome.exe directly (for custom/dev builds and -devmode without the store launcher)
+- Load order changes now need Apply (or Revert) before writing mod_order.txt; Start Game applies pending changes first
+- mod_order.txt lists mod folder names (with legacy modid matching); folder auto-rename is off by default; spaces in folder names become underscores
+- Import an existing mod_order.txt; first Default profile no longer rewrites a valid on-disk order
+- Steam installs launch through Steam on Windows (overlay works); Epic installs launch via the Epic protocol (fixes EOS license errors)
+- While the game runs, the mod list shows a soft overlay instead of blocking popups
+- External changes in the Mods folder reload the list automatically (skipped while load-order edits are pending)
+- Nested zip/rar/7z archives are unwrapped one level when installing
+- Update All Manifests rejects bogus versions like 1.0.0.0; clearer prompt when a saved install drive is missing
+
 ## [5.4.0]
 
 - While the game is running, mod changes are locked and the Start Game button becomes Stop Game

@@ -98,6 +98,7 @@ def test_wpf_data_snapshot_loads_and_round_trips(session: ManagerSession, paths:
     assert mods["beta"].version == "9.9"
 
     session.set_enabled(mods["alpha"], True)
+    session.apply_pending_order()
 
     user_data = json.loads(paths.user_mod_data_file.read_text(encoding="utf-8-sig"))
     assert user_data["alpha"]["FutureField"] == 42

@@ -2,11 +2,10 @@
 
 Launching:
 
-* Windows: ``KingdomCome.exe`` is started directly with the configured arguments (as before).
-* Linux: the game is a Windows build running under Proton, so it is started through Steam
-  (``steam -applaunch <appid> <args>``), falling back to the ``steam://rungameid/<appid>`` URL
-  (launch arguments cannot be passed that way). Non-Steam installs (Heroic, Lutris, ...) must
-  be launched from their own launcher.
+* Steam installs: started through Steam (``steam -applaunch`` / ``steam://``) so the overlay works.
+* Epic installs: started via ``com.epicgames.launcher://`` so EOS licensing works.
+* Other Windows installs (GOG / manual): ``KingdomCome.exe`` is started directly.
+* Linux non-Steam: must be launched from Heroic/Lutris/etc.
 """
 
 from __future__ import annotations
@@ -19,16 +18,17 @@ import shutil
 import signal
 import subprocess
 import sys
+import urllib.parse
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 
-from kcd_mod_manager.domain.models import GameInstall
+from kcd_mod_manager.domain.models import GameInstall, LaunchStore
 from kcd_mod_manager.infrastructure.steam import find_steamapps_for_install
 
 log = logging.getLogger(__name__)
 
-ALLOWED_URL_SCHEMES = ("https://", "http://", "steam://")
+ALLOWED_URL_SCHEMES = ("https://", "http://", "steam://", "com.epicgames.launcher://")
 
 
 class LaunchError(Exception):
@@ -70,6 +70,9 @@ def open_url(url: str) -> None:
         raise ValueError(f"Refusing to open URL with unsupported scheme: {url}")
     if sys.platform.startswith("linux") and shutil.which("xdg-open"):
         subprocess.Popen(["xdg-open", url], env=_clean_env())
+        return
+    if sys.platform == "win32" and url.startswith("com.epicgames.launcher://"):
+        os.startfile(url)  # type: ignore[attr-defined]
         return
     webbrowser.open(url)
 
@@ -177,29 +180,90 @@ def is_game_running(install: GameInstall, executables: list[Path] | None = None)
     return any(_same_path(path, install.executable_path) for path in candidates)
 
 
-def launch_game(install: GameInstall, launch_args: str, dev_mode: bool) -> LaunchResult:
+def _resolve_store(install: GameInstall) -> LaunchStore:
+    if install.launch_store is not LaunchStore.UNKNOWN:
+        return install.launch_store
+    if find_steamapps_for_install(install.root_path) is not None:
+        return LaunchStore.STEAM
+    return LaunchStore.UNKNOWN
+
+
+def _launch_steam(install: GameInstall, args: list[str]) -> LaunchResult:
+    steam = shutil.which("steam")
+    app_id = str(install.game.steam_app_id)
+    if steam:
+        cmd = [steam, "-applaunch", app_id, *args]
+        kwargs: dict = {"env": _clean_env()}
+        if sys.platform == "win32":
+            kwargs["close_fds"] = True
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen(cmd, **kwargs)
+        return LaunchResult("steam")
+    open_url(f"steam://rungameid/{app_id}")
+    return LaunchResult("steam-url", arguments_applied=not args)
+
+
+def _launch_epic(install: GameInstall) -> LaunchResult:
+    # Path-based URI works across Artifact IDs (Epic protocol activation docs).
+    encoded = urllib.parse.quote(str(install.root_path).replace("\\", "/"), safe="")
+    url = f"com.epicgames.launcher://apps/{encoded}?action=launch&silent=true"
+    try:
+        open_url(url)
+    except OSError as exc:
+        raise LaunchError(
+            "Could not start the Epic Games Launcher. Start Kingdom Come from Epic directly."
+        ) from exc
+    return LaunchResult("epic", arguments_applied=False)
+
+
+def _launch_direct(install: GameInstall, args: list[str]) -> LaunchResult:
+    exe = install.executable_path
+    if not exe.is_file():
+        raise LaunchError(f"Executable not found: {exe}")
+    kwargs: dict = {"cwd": str(exe.parent)}
+    if sys.platform == "win32":
+        kwargs["close_fds"] = True
+    else:
+        kwargs["env"] = _clean_env()
+        kwargs["start_new_session"] = True
+    subprocess.Popen([str(exe), *args], **kwargs)
+    return LaunchResult("direct")
+
+
+def launch_game(
+    install: GameInstall,
+    launch_args: str,
+    dev_mode: bool,
+    *,
+    via_store: bool = True,
+) -> LaunchResult:
+    """Start the game.
+
+    * ``via_store=True`` (default): Steam/Epic installs go through their launcher (overlay / EOS).
+    * ``via_store=False``: always run ``KingdomCome.exe`` directly — for custom/dev builds or when
+      you want ``-devmode`` / launch args without the store launcher.
+    * Manual / unknown installs always use direct launch.
+    """
     if is_game_running(install):
         raise LaunchError("The game is already running.")
     exe = install.executable_path
     if exe.suffix.lower() != ".exe":
         raise LaunchError("Only .exe files can be executed.")
     args = build_arguments(launch_args, dev_mode)
-    if sys.platform == "win32":
-        if not exe.is_file():
-            raise LaunchError(f"Executable not found: {exe}")
-        subprocess.Popen([str(exe), *args], cwd=str(exe.parent), close_fds=True)
-        return LaunchResult("direct")
 
-    in_steam_library = find_steamapps_for_install(install.root_path) is not None
-    steam = shutil.which("steam")
-    app_id = str(install.game.steam_app_id)
-    if steam and in_steam_library:
-        subprocess.Popen([steam, "-applaunch", app_id, *args], env=_clean_env(), start_new_session=True)
-        return LaunchResult("steam")
-    if in_steam_library:
-        open_url(f"steam://rungameid/{app_id}")
-        return LaunchResult("steam-url", arguments_applied=not args)
+    if not via_store:
+        return _launch_direct(install, args)
+
+    store = _resolve_store(install)
+    if store is LaunchStore.STEAM or find_steamapps_for_install(install.root_path) is not None:
+        return _launch_steam(install, args)
+    if store is LaunchStore.EPIC:
+        return _launch_epic(install)
+    if sys.platform == "win32" or store is LaunchStore.UNKNOWN:
+        return _launch_direct(install, args)
+
     raise LaunchError(
         "This installation is not in a Steam library. Start the game from the launcher you installed it with "
-        "(e.g. Heroic or Lutris)."
+        "(e.g. Heroic or Lutris), or enable direct launch in Settings."
     )

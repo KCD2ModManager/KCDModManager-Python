@@ -306,6 +306,20 @@ class SettingsDialog(QDialog):
         layout.addWidget(
             SettingRow(tr("SettingsLaunchArgsTitle"), tr("SettingsLaunchArgsDesc"), self.launch_args, "play")
         )
+        self._toggle_row(
+            layout,
+            "launch_via_store",
+            tr("SettingsLaunchViaStoreTitle"),
+            tr("SettingsLaunchViaStoreDesc"),
+            "play",
+        )
+        self._toggle_row(
+            layout,
+            "backup_order_on_apply",
+            tr("SettingsBackupOrderOnApplyTitle"),
+            tr("SettingsBackupOrderOnApplyDesc"),
+            "save",
+        )
         self._section(layout, tr("SettingsSectionInstallations"))
         for game in GameType:
             button = secondary_button(tr("SelectFolderButton"), "folder")

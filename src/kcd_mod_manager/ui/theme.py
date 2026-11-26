@@ -181,6 +181,19 @@ QFrame#card, QWidget#card {{
 QFrame#card QLabel, QFrame#card QCheckBox, QFrame#card QRadioButton {{ background: transparent; }}
 QFrame#gameCard {{ background-color: {p.panel}; border: 2px solid {p.separator}; border-radius: 8px; }}
 QFrame#gameCard:hover {{ border: 2px solid {p.accent_text}; }}
+QFrame#gameHero {{
+    background-color: #0a0a0a; border: 1px solid rgba(255, 255, 255, 28); border-radius: 10px;
+}}
+QFrame#gameHero:hover {{ border-color: {p.accent_text}; }}
+QLabel#gameHeroCover {{ background: transparent; border: none; margin: 0; padding: 0; }}
+QPushButton#gameHeroButton {{
+    background-color: rgba(8, 8, 8, 130); color: #FFFFFF; border: 1px solid rgba(255, 255, 255, 70);
+    border-radius: 14px; padding: 5px 12px; font-size: 11px; font-weight: 600;
+}}
+QPushButton#gameHeroButton:hover {{
+    background-color: rgba(8, 8, 8, 185); border-color: rgba(255, 255, 255, 140);
+}}
+QPushButton#gameHeroButton:pressed {{ background-color: rgba(0, 0, 0, 220); }}
 QFrame#footerBar {{ background-color: {p.panel}; border: none; border-top: 1px solid {p.separator}; }}
 QFrame#footerBar QLabel, QFrame#footerBar QCheckBox {{ background: transparent; }}
 QFrame#sidebar {{ background-color: {p.panel}; border: none; border-right: 1px solid {p.separator}; }}

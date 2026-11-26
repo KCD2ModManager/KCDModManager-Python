@@ -56,6 +56,23 @@ def apply_profile(mods: Sequence[Mod], profile: ModProfile) -> list[Mod]:
     return sorted(mods, key=lambda m: m.number)
 
 
+def describe_switch(current_mods: Sequence[Mod], profile: ModProfile) -> str:
+    """Short human summary of how applying ``profile`` would change enable/order state."""
+    active = set(profile.active_mods)
+    will_enable = [m.name for m in current_mods if m.id in active and not m.is_enabled]
+    will_disable = [m.name for m in current_mods if m.id not in active and m.is_enabled]
+    current_order = [m.id for m in sorted(current_mods, key=lambda m: m.number)]
+    order_changed = current_order != list(profile.load_order)
+    parts: list[str] = []
+    if will_enable:
+        parts.append(f"+{len(will_enable)}")
+    if will_disable:
+        parts.append(f"-{len(will_disable)}")
+    if order_changed:
+        parts.append("order")
+    return ", ".join(parts)
+
+
 def rename_mod_id(profile: ModProfile, old_id: str, new_id: str) -> bool:
     """Replace a mod id in place, keeping its position. Returns True if anything changed."""
     changed = False

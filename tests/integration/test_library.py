@@ -20,6 +20,10 @@ def library(tmp_path: Path) -> ModLibrary:
     return ModLibrary(OrderFileManager(tmp_path / "safety", sleep=lambda _s: None))
 
 
+def renaming_on() -> AppSettings:
+    return AppSettings(enable_file_renaming=True)
+
+
 def install_for(root: Path):
     return make_install(GameType.KCD2, root, root / "Bin" / "Win64MasterMasterSteamPGO" / "KingdomCome.exe")
 
@@ -35,7 +39,7 @@ def test_install_archive_preserves_nested_structure(
             "BetterSwords/Data/Localization/english_xml.pak": b"loc",
         },
     )
-    result = library.install_archive(archive, game_root / "Mods", AppSettings(), 187)
+    result = library.install_archive(archive, game_root / "Mods", renaming_on(), 187)
     assert result.status is InstallStatus.INSTALLED and result.mod is not None
     target = game_root / "Mods" / "better_swords"
     assert (target / "mod.manifest").is_file()
@@ -50,7 +54,7 @@ def test_install_archive_refuses_same_or_older(library: ModLibrary, game_root: P
     archive = make_zip(
         tmp_path / "sword.zip", {"mod.manifest": manifest_xml("Sword", "1.5", "sword"), "a.pak": b""}
     )
-    result = library.install_archive(archive, game_root / "Mods", AppSettings(), -1)
+    result = library.install_archive(archive, game_root / "Mods", renaming_on(), -1)
     assert result.status is InstallStatus.NOT_NEWER
     assert "2.0" in (game_root / "Mods" / "sword" / "mod.manifest").read_text()
 
@@ -61,7 +65,7 @@ def test_install_archive_upgrades_existing(library: ModLibrary, game_root: Path,
     archive = make_zip(
         tmp_path / "sword.zip", {"mod.manifest": manifest_xml("Sword", "1.1", "sword"), "b.pak": b""}
     )
-    result = library.install_archive(archive, game_root / "Mods", AppSettings(), 1)
+    result = library.install_archive(archive, game_root / "Mods", renaming_on(), 1)
     assert result.status is InstallStatus.INSTALLED
     assert not (folder / "old_only.txt").exists()
     assert (folder / "b.pak").exists()
@@ -72,7 +76,7 @@ def test_install_archive_generates_manifest_for_pak_only(
     library: ModLibrary, game_root: Path, tmp_path: Path
 ) -> None:
     archive = make_zip(tmp_path / "Cool Mod-55-2-1-1700000000.zip", {"Data/cool.pak": b""})
-    result = library.install_archive(archive, game_root / "Mods", AppSettings(), 55)
+    result = library.install_archive(archive, game_root / "Mods", renaming_on(), 55)
     assert result.status is InstallStatus.INSTALLED and result.mod is not None
     assert result.mod.version == "2.1"
     assert result.mod.id == "Cool Mod-55-2-1-1700000000"
@@ -83,17 +87,17 @@ def test_install_archive_invalid_manifest_requires_confirmation(
 ) -> None:
     archive = make_zip(tmp_path / "bad.zip", {"mod.manifest": "<kcd_mod><info/></kcd_mod>", "x.pak": b""})
     assert (
-        library.install_archive(archive, game_root / "Mods", AppSettings(), 1).status
+        library.install_archive(archive, game_root / "Mods", renaming_on(), 1).status
         is InstallStatus.INVALID_MANIFEST
     )
     assert not (game_root / "Mods" / "bad").exists()
     result = library.install_archive(
-        archive, game_root / "Mods", AppSettings(), 1, allow_generated_manifest=True
+        archive, game_root / "Mods", renaming_on(), 1, allow_generated_manifest=True
     )
     assert result.status is InstallStatus.INSTALLED
 
 
-def test_install_archive_without_renaming_keeps_folder_name(
+def test_install_archive_without_renaming_sanitizes_spaces(
     library: ModLibrary, game_root: Path, tmp_path: Path
 ) -> None:
     archive = make_zip(
@@ -102,13 +106,13 @@ def test_install_archive_without_renaming_keeps_folder_name(
     )
     result = library.install_archive(archive, game_root / "Mods", AppSettings(enable_file_renaming=False), 1)
     assert result.status is InstallStatus.INSTALLED
-    assert (game_root / "Mods" / "Original Folder" / "mod.manifest").exists()
+    assert (game_root / "Mods" / "Original_Folder" / "mod.manifest").exists()
 
 
 def test_not_a_mod(library: ModLibrary, game_root: Path, tmp_path: Path) -> None:
     archive = make_zip(tmp_path / "readme.zip", {"readme.txt": "hi"})
     assert (
-        library.install_archive(archive, game_root / "Mods", AppSettings(), 1).status
+        library.install_archive(archive, game_root / "Mods", renaming_on(), 1).status
         is InstallStatus.NOT_A_MOD
     )
 
@@ -151,7 +155,7 @@ def test_install_folder(library: ModLibrary, game_root: Path, tmp_path: Path) ->
     result = library.install_folder(source, game_root / "Mods", AppSettings())
     assert result.status is InstallStatus.INSTALLED and result.mod is not None
     assert result.mod.id == "Some Mod"
-    assert (game_root / "Mods" / "Some Mod" / "Data" / "x.pak").exists()
+    assert (game_root / "Mods" / "SomeMod" / "Data" / "x.pak").exists()
     assert "<modid>" not in (source / "mod.manifest").read_text()  # source untouched
 
 
@@ -179,7 +183,7 @@ def test_load_mods_order_metadata_and_rename(library: ModLibrary, game_root: Pat
     )
     (mods_dir / "mod_notes.json").write_text('{"alpha": "remember"}')
 
-    mods = library.load_mods(install_for(game_root), AppSettings())
+    mods = library.load_mods(install_for(game_root), renaming_on())
     ids = [m.id for m in mods]
     assert ids[:2] == ["beta", "alpha"]
     assert set(ids[2:]) == {"gamma", "PakOnly"}
@@ -198,17 +202,19 @@ def test_load_mods_never_deletes_on_rename_collision(library: ModLibrary, game_r
     other = mods_dir / "Other Folder"
     write_manifest(other, "Other", "1.0", "dup")
     (other / "precious.txt").write_text("keep")
-    library.load_mods(install_for(game_root), AppSettings())
+    library.load_mods(install_for(game_root), renaming_on())
     assert (mods_dir / "dup" / "mod.manifest").exists()
     assert (other / "precious.txt").read_text() == "keep"
 
 
-def test_load_mods_without_renaming_leaves_folders(library: ModLibrary, game_root: Path) -> None:
+def test_load_mods_without_renaming_sanitizes_spaces(library: ModLibrary, game_root: Path) -> None:
     folder = game_root / "Mods" / "Gamma Folder"
     write_manifest(folder, "Gamma", "1.0", None)
     mods = library.load_mods(install_for(game_root), AppSettings(enable_file_renaming=False))
-    assert folder.exists() and mods[0].path == folder
-    assert "<modid>" not in (folder / "mod.manifest").read_text()
+    cleaned = game_root / "Mods" / "Gamma_Folder"
+    assert cleaned.exists() and mods[0].path == cleaned
+    assert not folder.exists()
+    assert "<modid>" not in (cleaned / "mod.manifest").read_text()
 
 
 def test_load_workshop_mods_in_memory(library: ModLibrary, game_root: Path) -> None:
@@ -219,7 +225,7 @@ def test_load_workshop_mods_in_memory(library: ModLibrary, game_root: Path) -> N
     ws = steamapps / "workshop" / "content" / "1771300" / "998877"
     write_manifest(ws, "From Workshop", "1.0", None)
     (game_root / "Mods" / "mod_order.txt").write_text("# From Workshop\n")
-    mods = library.load_mods(install_for(game_root), AppSettings())
+    mods = library.load_mods(install_for(game_root), renaming_on())
     assert len(mods) == 1 and mods[0].is_workshop_mod and mods[0].id == "From Workshop"
     assert mods[0].is_enabled is False
     assert "<modid>" not in (ws / "mod.manifest").read_text()
@@ -228,7 +234,7 @@ def test_load_workshop_mods_in_memory(library: ModLibrary, game_root: Path) -> N
 def test_compatibility_flag(library: ModLibrary, game_root: Path) -> None:
     write_manifest(game_root / "Mods" / "old", "Old", "1.0", "old", extra="<gameVersion>1.1</gameVersion>")
     write_manifest(game_root / "Mods" / "ok", "Ok", "1.0", "ok", extra="<gameVersion>1.2</gameVersion>")
-    mods = {m.id: m for m in library.load_mods(install_for(game_root), AppSettings())}
+    mods = {m.id: m for m in library.load_mods(install_for(game_root), renaming_on())}
     assert not mods["old"].is_compatible and mods["ok"].is_compatible
 
 
@@ -238,14 +244,14 @@ def test_apply_update_keeps_old_copy_on_failure(library: ModLibrary, game_root: 
     bad = tmp_path / "update.zip"
     bad.write_bytes(b"corrupt")
     with pytest.raises(ArchiveError):
-        library.apply_update(bad, mod, AppSettings())
+        library.apply_update(bad, mod, renaming_on())
     assert (folder / "mod.manifest").exists()
 
     good = make_zip(
         tmp_path / "good.zip",
         {"Sword/mod.manifest": manifest_xml("Sword", "1.1", "sword"), "Sword/new.pak": b""},
     )
-    info = library.apply_update(good, mod, AppSettings())
+    info = library.apply_update(good, mod, renaming_on())
     assert info.version == "1.1" and (folder / "new.pak").exists()
 
 

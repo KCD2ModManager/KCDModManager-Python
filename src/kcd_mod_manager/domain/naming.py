@@ -37,6 +37,11 @@ def safe_file_name(name: str) -> str:
     return _INVALID_FILENAME_CHARS.sub("_", name)
 
 
+def sanitize_folder_name(name: str) -> str:
+    """Folder name safe for the game and ``mod_order.txt`` (spaces become underscores)."""
+    return safe_file_name(name).replace(" ", "_").strip(" ._") or "mod"
+
+
 def extract_mod_number(file_stem: str) -> int:
     """First standalone number in an archive name (Nexus: ``Name-187-1-2-1700000000``) or -1."""
     match = _MOD_NUMBER.search(file_stem)

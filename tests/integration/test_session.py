@@ -43,6 +43,10 @@ def test_toggle_and_reorder_persist_to_profile_and_game(loaded: ManagerSession) 
     gamma = loaded.mods[2]
     loaded.set_enabled(gamma, True)
     loaded.move(gamma, list(loaded.mods), 0)
+    assert loaded.order_dirty
+    assert order_lines(loaded) == ["alpha", "beta", "# gamma"]
+    loaded.apply_pending_order()
+    assert not loaded.order_dirty
     assert order_lines(loaded) == ["gamma", "alpha", "beta"]
     profile = loaded.profile_store.load(GameType.KCD2, "Default")
     assert profile is not None and profile.load_order == ["gamma", "alpha", "beta"]
@@ -74,11 +78,13 @@ def test_mod_order_disabled_writes_backup_file(loaded: ManagerSession) -> None:
     loaded.settings.mod_order_enabled = False
     loaded.order_files.apply_setting(False, loaded.mods_dir)
     loaded.set_enabled(loaded.mods[0], False)
+    loaded.apply_pending_order()
     assert not (loaded.mods_dir / "mod_order.txt").exists()
     assert (loaded.mods_dir / "mod_order_backup.txt").read_text().splitlines()[0] == "# alpha"
 
 
 def test_install_archive_adds_disabled_mod_at_end(loaded: ManagerSession, tmp_path: Path) -> None:
+    loaded.settings.enable_file_renaming = True
     archive = make_zip(
         tmp_path / "Delta-77-1-0-1.zip", {"mod.manifest": manifest_xml("Delta", "1.0", "delta"), "d.pak": b""}
     )
@@ -119,13 +125,14 @@ def test_user_data_merge_on_reload(loaded: ManagerSession) -> None:
 
 
 def test_rename_id_updates_all_references(loaded: ManagerSession) -> None:
+    loaded.settings.enable_file_renaming = True
     beta = loaded.mods[1]
     loaded.set_note(beta, "keep")
     loaded.set_mod_number(beta, 321)
     loaded.create_profile("Other")
     new_id = loaded.rename_id(beta, "Beta Two")
     assert new_id == "Beta Two"
-    assert (loaded.mods_dir / "Beta Two" / "mod.manifest").exists()
+    assert (loaded.mods_dir / "Beta_Two" / "mod.manifest").exists()
     assert not (loaded.mods_dir / "beta").exists()
     notes = json.loads((loaded.mods_dir / "mod_notes.json").read_text())
     assert notes == {"Beta Two": "keep"}

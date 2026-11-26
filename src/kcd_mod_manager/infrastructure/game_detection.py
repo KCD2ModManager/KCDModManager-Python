@@ -15,19 +15,25 @@ import sys
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from kcd_mod_manager.domain.models import GameInstall, GameType
+from kcd_mod_manager.domain.models import GameInstall, GameType, LaunchStore
 from kcd_mod_manager.infrastructure.fs import read_text
 from kcd_mod_manager.infrastructure.paths import find_child_ci, resolve_ci
-from kcd_mod_manager.infrastructure.pe_version import read_file_version
-from kcd_mod_manager.infrastructure.steam import library_folders, steamapps_dir
+from kcd_mod_manager.infrastructure.pe_version import read_file_version, read_product_version
+from kcd_mod_manager.infrastructure.steam import find_steamapps_for_install, library_folders, steamapps_dir
 
 log = logging.getLogger(__name__)
 
 EXECUTABLE_NAME = "KingdomCome.exe"
 _BIN_CANDIDATES: dict[GameType, tuple[tuple[str, ...], ...]] = {
     GameType.KCD1: (("Bin", "Win64"),),
-    GameType.KCD2: (("Bin", "Win64MasterMasterSteamPGO"), ("Bin", "Win64")),
+    GameType.KCD2: (
+        ("Bin", "Win64MasterMasterSteamPGO"),
+        ("Bin", "Win64MasterMasterEpicPGO"),
+        ("Bin", "Win64MasterMasterEGSPGO"),
+        ("Bin", "Win64"),
+    ),
 }
+_BOGUS_VERSIONS = frozenset({"", "0.0.0.0", "1.0.0.0", "0.0.0", "1.0.0"})
 
 
 def _find_executable_recursive(directory: Path, depth: int, max_depth: int) -> Path | None:
@@ -67,16 +73,69 @@ def is_valid_game_folder(root: Path, game: GameType) -> bool:
     return root.is_dir() and find_executable(root, game) is not None
 
 
+def is_usable_game_version(version: str | None) -> bool:
+    """False for empty / placeholder PE stubs like ``1.0.0.0`` that break Update Manifests."""
+    if version is None:
+        return False
+    text = version.strip()
+    return bool(text) and text not in _BOGUS_VERSIONS
+
+
 def read_game_version(root: Path, executable: Path) -> str | None:
+    candidates: list[str] = []
     version_file = find_child_ci(root, "version.txt")
     if version_file is not None and version_file.is_file():
         try:
             text = read_text(version_file).strip()
             if text:
-                return text
+                candidates.append(text)
         except (OSError, UnicodeDecodeError):
             pass
-    return read_file_version(executable)
+    for reader in (read_file_version, read_product_version):
+        value = reader(executable)
+        if value:
+            candidates.append(value)
+    for value in candidates:
+        if is_usable_game_version(value):
+            return value.strip()
+    return None
+
+
+def detect_launch_store(root: Path, executable: Path) -> LaunchStore:
+    if find_steamapps_for_install(root) is not None:
+        return LaunchStore.STEAM
+    if (root / ".egstore").is_dir() or any(
+        part for part in executable.parts if "epic" in part.casefold()
+    ):
+        return LaunchStore.EPIC
+    # GOG Galaxy often leaves a goggame-*.info next to the root.
+    try:
+        if any(p.name.lower().startswith("goggame-") for p in root.iterdir() if p.is_file()):
+            return LaunchStore.GOG
+    except OSError:
+        pass
+    parent = str(root).casefold()
+    if "epic games" in parent or "epicgames" in parent:
+        return LaunchStore.EPIC
+    if "gog" in parent:
+        return LaunchStore.GOG
+    return LaunchStore.UNKNOWN
+
+
+def path_volume_missing(path: Path | str) -> bool:
+    """True when the path's drive/root is not mounted (stale secondary-drive install)."""
+    raw = Path(path)
+    if not raw.parts:
+        return False
+    try:
+        anchor = raw.anchor or raw.drive
+        if not anchor:
+            # Relative path — treat as present; caller resolves against cwd.
+            return False
+        root = Path(anchor)
+        return not root.exists()
+    except OSError:
+        return True
 
 
 def make_install(
@@ -92,6 +151,7 @@ def make_install(
         executable_path=executable,
         mods_path=mods,
         game_version=read_game_version(root, executable),
+        launch_store=detect_launch_store(root, executable),
     )
 
 

@@ -47,6 +47,11 @@ def settings_from_dict(data: dict[str, Any]) -> AppSettings:
             setattr(settings, key, coerce_value(value, getattr(settings, key)))
         else:
             settings.extra[key] = value
+    # Older builds only stored the global flag — seed per-game prefs from it.
+    if "launch_via_store_kcd1" not in data:
+        settings.launch_via_store_kcd1 = settings.launch_via_store
+    if "launch_via_store_kcd2" not in data:
+        settings.launch_via_store_kcd2 = settings.launch_via_store
     return settings
 
 

@@ -106,12 +106,20 @@ class OrderFileManager:
             except OSError as exc:
                 log.error("Consolidating mod order files failed: %s", exc)
 
-    def _save_safety_copy(self, path: Path) -> None:
+    def backup_active(self, mods_dir: Path, mod_order_enabled: bool) -> Path | None:
+        """Snapshot the current order file into the safety folder. ``None`` if nothing to copy."""
+        path = self.active_file(mods_dir, mod_order_enabled)
+        if not path.is_file():
+            return None
+        return self._save_safety_copy(path)
+
+    def _save_safety_copy(self, path: Path) -> Path:
         self._safety_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         target = self._safety_dir / f"{path.stem}_{stamp}{path.suffix}"
         shutil.copy2(path, target)
         log.info("Saved a copy of %s to %s before removing it", path.name, target)
+        return target
 
     def _move(self, source: Path, target: Path, attempts: int = 3) -> None:
         for attempt in range(1, attempts + 1):

@@ -16,7 +16,7 @@ from kcd_mod_manager.application.library import InstallResult, InstallStatus, Mo
 from kcd_mod_manager.application.settings import AppSettings
 from kcd_mod_manager.domain import categories as cat
 from kcd_mod_manager.domain import profiles as prof
-from kcd_mod_manager.domain.mod_order import move_in_scope, renumber
+from kcd_mod_manager.domain.mod_order import apply_order_entries, move_in_scope, renumber
 from kcd_mod_manager.domain.models import (
     ConflictGroup,
     GameInstall,
@@ -28,7 +28,7 @@ from kcd_mod_manager.domain.models import (
     ModVersionInfo,
     UserModData,
 )
-from kcd_mod_manager.domain.naming import generate_mod_id, safe_file_name
+from kcd_mod_manager.domain.naming import generate_mod_id, safe_file_name, sanitize_folder_name
 from kcd_mod_manager.domain.versioning import is_game_version_compatible, is_newer
 from kcd_mod_manager.infrastructure import manifest_files as mf
 from kcd_mod_manager.infrastructure.app_paths import AppPaths
@@ -42,7 +42,7 @@ from kcd_mod_manager.infrastructure.game_detection import (
     make_install,
 )
 from kcd_mod_manager.infrastructure.nexus import NexusClient, NexusError, NexusRateLimited, latest_file
-from kcd_mod_manager.infrastructure.order_files import OrderFileManager
+from kcd_mod_manager.infrastructure.order_files import OrderFileManager, read_order_file
 from kcd_mod_manager.infrastructure.paths import same_path
 from kcd_mod_manager.infrastructure.profiles_store import ProfileStore
 from kcd_mod_manager.infrastructure.repositories import (
@@ -101,6 +101,10 @@ class ManagerSession:
         self.profiles: list[ModProfile] = []
         self.selected_profile: str | None = None
         self.conflicts: list[ConflictGroup] = []
+        self.order_dirty: bool = False
+        self._order_snapshot: list[tuple[str, bool, int]] | None = None
+        self._preserve_game_order_on_next_apply: bool = False
+        self._writes_suppressed: int = 0
 
     # ------------------------------------------------------------------ settings
     def save_settings(self) -> None:
@@ -236,6 +240,10 @@ class ManagerSession:
             self.profile_store.save(self.game, default)
             self.profile_store.write_order(self.game, default.profile_name, self.mods)
             self.profiles = [default]
+            # Keep an existing game order file intact on the first Default apply.
+            order_path = self.order_files.active_file(self.mods_dir, self.settings.mod_order_enabled)
+            if order_path.is_file() and order_path.stat().st_size > 0:
+                self._preserve_game_order_on_next_apply = True
 
     def initial_profile_name(self) -> str | None:
         if not self.profiles or self.game is None:
@@ -250,16 +258,22 @@ class ManagerSession:
     def apply_profile(self, name: str) -> None:
         if self.game is None:
             raise SessionError("No game selected.")
+        if self.order_dirty and self.selected_profile is not None and self.selected_profile != name:
+            # Persist staged edits into the profile we are leaving.
+            self.apply_pending_order()
         profile = self.profile_store.load(self.game, name)
         if profile is None:
             raise SessionError(f"Profile '{name}' not found")
-        by_id = {m.id: m for m in self.mods}
-        for index, entry in enumerate(self.profile_store.read_order(self.game, name), start=1):
-            mod = by_id.get(entry.mod_id)
-            if mod is not None:
-                mod.number, mod.is_enabled = index, entry.enabled
+        entries = self.profile_store.read_order(self.game, name)
+        if entries:
+            self.mods = apply_order_entries(self.mods, entries)
         self.mods = prof.apply_profile(self.mods, profile)
-        self.order_files.write(self.mods_dir, self.mods, self.settings.mod_order_enabled)
+        preserve = self._preserve_game_order_on_next_apply
+        self._preserve_game_order_on_next_apply = False
+        if not preserve:
+            self.order_files.write(self.mods_dir, self.mods, self.settings.mod_order_enabled)
+        self.order_dirty = False
+        self._order_snapshot = None
         self.selected_profile = name
         self.settings.set_last_used_profile(self.game, name)
         self.save_settings()
@@ -272,6 +286,8 @@ class ManagerSession:
             raise SessionError("Profile name must not be empty.")
         if self.profile_store.exists(self.game, name):
             raise SessionError(f"A profile named '{name}' already exists.")
+        if self.order_dirty:
+            self.apply_pending_order()
         renumber(self.mods)
         profile = prof.snapshot(name, self.mods)
         self.profile_store.save(self.game, profile)
@@ -326,21 +342,94 @@ class ManagerSession:
             self.save_profile()
         else:
             self.order_files.write(self.mods_dir, self.mods, self.settings.mod_order_enabled)
+        self.order_dirty = False
+        self._order_snapshot = None
+
+    def _capture_order_snapshot(self) -> list[tuple[str, bool, int]]:
+        return [(m.id, m.is_enabled, m.number) for m in self.mods]
+
+    def _mark_order_dirty(self) -> None:
+        if not self.order_dirty:
+            self._order_snapshot = self._capture_order_snapshot()
+            self.order_dirty = True
+        renumber(self.mods)
+
+    def apply_pending_order(self) -> None:
+        """Write staged enable/disable/reorder changes to disk."""
+        if not self.order_dirty:
+            return
+        if self.settings.backup_order_on_apply:
+            try:
+                self.order_files.backup_active(self.mods_dir, self.settings.mod_order_enabled)
+            except OSError as exc:
+                log.warning("Could not backup mod order before apply: %s", exc)
+        self.save_mod_order()
+
+    def revert_pending_order(self) -> None:
+        """Restore enable flags and order from the last applied snapshot."""
+        if not self.order_dirty or self._order_snapshot is None:
+            self.order_dirty = False
+            self._order_snapshot = None
+            return
+        by_id = {m.id: m for m in self.mods}
+        restored: list[Mod] = []
+        for mod_id, enabled, number in self._order_snapshot:
+            mod = by_id.pop(mod_id, None)
+            if mod is None:
+                continue
+            mod.is_enabled = enabled
+            mod.number = number
+            restored.append(mod)
+        restored.extend(by_id.values())
+        self.mods = restored
+        renumber(self.mods)
+        self.order_dirty = False
+        self._order_snapshot = None
+
+    def import_mod_order(self, path: Path) -> int:
+        """Apply an external ``mod_order.txt`` as staged changes. Returns matched entry count."""
+        entries = read_order_file(path)
+        if not entries:
+            raise SessionError("The selected file has no load-order entries.")
+        if not self.order_dirty:
+            self._order_snapshot = self._capture_order_snapshot()
+        self.mods = apply_order_entries(self.mods, entries)
+        self.order_dirty = True
+        renumber(self.mods)
+        return len(entries)
+
+    def begin_disk_write(self) -> None:
+        """Suppress folder-watcher reloads while we mutate the Mods directory."""
+        self._writes_suppressed += 1
+
+    def end_disk_write(self) -> None:
+        self._writes_suppressed = max(0, self._writes_suppressed - 1)
+
+    @property
+    def disk_writes_suppressed(self) -> bool:
+        return self._writes_suppressed > 0
 
     # ------------------------------------------------------------------ enable/disable/order
     def set_enabled(self, mod: Mod, enabled: bool) -> None:
+        if mod.is_enabled == enabled:
+            return
+        self._mark_order_dirty()
         mod.is_enabled = enabled
-        self.save_mod_order()
 
     def set_all_enabled(self, enabled: bool) -> None:
+        if all(m.is_enabled == enabled for m in self.mods):
+            return
+        self._mark_order_dirty()
         for mod in self.mods:
             mod.is_enabled = enabled
-        self.save_mod_order()
 
     def set_enabled_many(self, mods: Sequence[Mod], enabled: bool) -> None:
-        for mod in mods:
+        targets = [m for m in mods if m.is_enabled != enabled]
+        if not targets:
+            return
+        self._mark_order_dirty()
+        for mod in targets:
             mod.is_enabled = enabled
-        self.save_mod_order()
 
     def set_category_many(self, mods: Sequence[Mod], category_id: str | None) -> None:
         for mod in mods:
@@ -348,7 +437,7 @@ class ManagerSession:
 
     def move(self, mod: Mod, visible: Sequence[Mod], target_index: int) -> bool:
         if move_in_scope(self.mods, visible, mod, target_index):
-            self.save_mod_order()
+            self._mark_order_dirty()
             return True
         return False
 
@@ -357,8 +446,10 @@ class ManagerSession:
         by_id = {m.id: m for m in self.mods}
         reordered = [by_id[i] for i in ordered_ids if i in by_id]
         reordered.extend(m for m in self.mods if m.id not in set(ordered_ids))
+        if [m.id for m in reordered] == [m.id for m in self.mods]:
+            return
+        self._mark_order_dirty()
         self.mods = reordered
-        self.save_mod_order()
 
     # ------------------------------------------------------------------ installation
     def _add_installed(self, result: InstallResult) -> InstallResult:
@@ -386,13 +477,21 @@ class ManagerSession:
     def install_archive(
         self, archive: Path, mod_number: int, allow_generated_manifest: bool = False
     ) -> InstallResult:
-        result = self.library.install_archive(
-            archive, self.mods_dir, self.settings, mod_number, allow_generated_manifest
-        )
-        return self._add_installed(result)
+        self.begin_disk_write()
+        try:
+            result = self.library.install_archive(
+                archive, self.mods_dir, self.settings, mod_number, allow_generated_manifest
+            )
+            return self._add_installed(result)
+        finally:
+            self.end_disk_write()
 
     def install_folder(self, folder: Path) -> InstallResult:
-        return self._add_installed(self.library.install_folder(folder, self.mods_dir, self.settings))
+        self.begin_disk_write()
+        try:
+            return self._add_installed(self.library.install_folder(folder, self.mods_dir, self.settings))
+        finally:
+            self.end_disk_write()
 
     @staticmethod
     def _require_local(mod: Mod) -> None:
@@ -401,9 +500,13 @@ class ManagerSession:
 
     def delete_mod(self, mod: Mod) -> None:
         self._require_local(mod)
-        self.library.delete_mod_files(mod)
-        self.mods = [m for m in self.mods if m is not mod]
-        self.save_mod_order()
+        self.begin_disk_write()
+        try:
+            self.library.delete_mod_files(mod)
+            self.mods = [m for m in self.mods if m is not mod]
+            self.save_mod_order()
+        finally:
+            self.end_disk_write()
 
     def create_backup(self) -> Path | None:
         return self.library.create_backup(self.mods_dir, self.settings.backup_max_count)
@@ -435,7 +538,7 @@ class ManagerSession:
             raise SessionError("The mod folder does not exist or is not specified.")
         old_id = mod.id
         new_id = generate_mod_id(new_name.strip(), True)
-        new_path = self.mods_dir / safe_file_name(new_id)
+        new_path = self.mods_dir / sanitize_folder_name(safe_file_name(new_id))
         if new_path.exists() and not same_path(new_path, mod.path):
             raise SessionError("A mod folder with the new ID already exists. Please choose a different name.")
         manifest = mf.find_manifest(mod.path)
@@ -562,19 +665,23 @@ class ManagerSession:
 
     # ------------------------------------------------------------------ manifests
     def update_manifest_game_version(self, mods: Sequence[Mod]) -> int:
+        from kcd_mod_manager.infrastructure.game_detection import is_usable_game_version
+
         install = self.install
-        if install is None or not install.game_version:
+        if install is None or not is_usable_game_version(install.game_version):
             raise SessionError("Could not detect game version")
+        version = install.game_version
+        assert version is not None
         count = 0
         for mod in mods:
             if mod.path is None or mod.is_workshop_mod:
                 continue
             for manifest in files_with_suffix(mod.path, ".manifest"):
                 if manifest.name.casefold() == "mod.manifest" and mf.update_manifest_fields(
-                    manifest, {"gameVersion": install.game_version}
+                    manifest, {"gameVersion": version}
                 ):
                     count += 1
-            mod.game_version = install.game_version
+            mod.game_version = version
             mod.is_compatible = True
         return count
 

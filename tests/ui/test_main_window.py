@@ -46,6 +46,11 @@ def no_dialogs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     monkeypatch.setattr(
         dialogs, "confirm", lambda _p, message, _t=None: shown.append(f"confirm:{message}") or True
     )
+    monkeypatch.setattr(
+        dialogs,
+        "ask_unsaved_order",
+        lambda _p, message: shown.append(f"unsaved:{message}") or "discard",
+    )
     return shown
 
 
@@ -64,6 +69,8 @@ def window(qtbot: QtBot, ctx: AppContext, game_root: Path, no_dialogs: list[str]
     assert w.start()
     wait_idle(qtbot, w)
     yield w
+    if w.session.order_dirty:
+        w.session.revert_pending_order()
     wait_idle(qtbot, w)
 
 
@@ -75,7 +82,8 @@ def test_startup_loads_mods_profile_and_conflicts(window: MainWindow, game_root:
     assert [m.id for m in window.model.mods] == ["alpha", "beta", "gamma"]
     assert window.session.selected_profile == "Default"
     assert window.profile_combo.currentText() == "Default"
-    assert window.game_label.text() == "Kingdom Come: Deliverance II"
+    assert window.game_card.toolTip() == "Kingdom Come: Deliverance II"
+    assert not window.game_cover.pixmap().isNull()
     assert window.enabled_label.text().endswith("/3")
     assert len(window.session.conflicts) == 1
     assert window.conflict_badge.text() == "1"
@@ -101,9 +109,13 @@ def test_toggle_and_enable_all_persist_order_file(window: MainWindow, game_root:
     was = beta.is_enabled
     window.toggle_mod(beta)
     assert beta.is_enabled is not was
+    assert window.session.order_dirty
     window.set_all_enabled(False)
+    assert order_lines(game_root) != ["# alpha", "# beta", "# gamma"]
+    window.apply_pending_order()
     assert order_lines(game_root) == ["# alpha", "# beta", "# gamma"]
     window.set_all_enabled(True)
+    window.apply_pending_order()
     assert order_lines(game_root) == ["alpha", "beta", "gamma"]
     assert window.enabled_label.text().endswith("3/3")
 
@@ -114,6 +126,8 @@ def test_drag_and_drop_reorders_and_saves(qtbot: QtBot, window: MainWindow, game
     assert window.model.dropMimeData(data, window.model.supportedDropActions(), 0, 0, QModelIndex()) is False
     qtbot.waitUntil(lambda: window.model.mods[0].id == "gamma")
     assert [m.id for m in window.session.mods] == ["gamma", "alpha", "beta"]
+    assert window.session.order_dirty
+    window.apply_pending_order()
     assert [line.lstrip("# ") for line in order_lines(game_root)] == ["gamma", "alpha", "beta"]
 
 
@@ -131,9 +145,31 @@ def test_search_disables_reordering_and_sort(window: MainWindow, no_dialogs: lis
     assert not window.reorder_allowed
 
 
+def test_quick_filter_and_profile_badge(window: MainWindow) -> None:
+    assert window.profile_badge.isVisibleTo(window)
+    assert window.profile_badge.text() == "Default"
+    window.quick_filter_combo.setCurrentIndex(1)  # conflicts
+    assert window.quick_filter.value == "conflicts"
+    assert {m.id for m in window.model.mods} == {"alpha", "beta"}
+    assert not window.reorder_allowed
+    window.session.mods[0].has_update = True
+    window.quick_filter_combo.setCurrentIndex(2)  # updates
+    assert [m.id for m in window.model.mods] == ["alpha"]
+    window.quick_filter_combo.setCurrentIndex(0)
+
+
+def test_store_launch_remembered_per_game(window: MainWindow) -> None:
+    window.store_launch_toggle.setChecked(False)
+    assert window.settings.launch_via_store_kcd2 is False
+    window.settings.launch_via_store_kcd1 = True
+    window._sync_store_launch_toggle()
+    assert window.store_launch_toggle.isChecked() is False
+
+
 def test_install_archive_and_delete(
     qtbot: QtBot, window: MainWindow, game_root: Path, tmp_path: Path, no_dialogs: list[str]
 ) -> None:
+    window.settings.enable_file_renaming = True
     archive = make_zip(
         tmp_path / "Cool Mod-123-1-0-1700000000.zip",
         {"cool/mod.manifest": manifest_xml("Cool Mod", "1.0", "cool_mod"), "cool/data/cool.pak": b"PK"},
@@ -429,11 +465,12 @@ def test_game_running_locks_mod_actions(window: MainWindow, monkeypatch: pytest.
     assert not window.add_button.isEnabled()
     assert not window.enable_all_button.isEnabled()
     assert window.start_button.text() == tr("ButtonStopGame")
+    assert not window.game_overlay.isHidden()
     mod = window.session.mods[0]
     was = mod.is_enabled
     window.toggle_mod(mod)
     assert mod.is_enabled is was
-    assert window.status_label.text() == tr("ModActionsLockedWhileRunning")
+    assert not window.list_view.isEnabled()
 
 
 def test_multi_select_bulk_actions(window: MainWindow) -> None:

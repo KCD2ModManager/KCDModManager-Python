@@ -8,16 +8,33 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QItemSelectionModel, QPoint, Qt, QTimer
+from PySide6.QtCore import (
+    QByteArray,
+    QEasingCurve,
+    QEvent,
+    QFileSystemWatcher,
+    QItemSelectionModel,
+    QModelIndex,
+    QObject,
+    QPoint,
+    QPropertyAnimation,
+    Qt,
+    QTimer,
+)
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
+    QColor,
     QDragEnterEvent,
     QDropEvent,
     QIcon,
+    QKeySequence,
+    QLinearGradient,
+    QMouseEvent,
     QPainter,
     QPainterPath,
     QPixmap,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -26,11 +43,15 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QProgressBar,
     QPushButton,
+    QSystemTrayIcon,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -40,8 +61,15 @@ from kcd_mod_manager.application.endorsement import record_launch, should_ask_fo
 from kcd_mod_manager.application.library import BACKUP_ROOT_NAME, InstallResult, InstallStatus
 from kcd_mod_manager.application.session import SessionError, UpdateCheckSummary
 from kcd_mod_manager.bootstrap import AppContext
+from kcd_mod_manager.domain import profiles as prof
 from kcd_mod_manager.domain.highlight import PRESETS
-from kcd_mod_manager.domain.library_view import UNCATEGORIZED, SortMode, next_sort_mode, visible_mods
+from kcd_mod_manager.domain.library_view import (
+    UNCATEGORIZED,
+    QuickFilter,
+    SortMode,
+    next_sort_mode,
+    visible_mods,
+)
 from kcd_mod_manager.domain.models import ConflictGroup, GameInstall, GameType, Mod
 from kcd_mod_manager.domain.naming import extract_mod_number
 from kcd_mod_manager.i18n import tr
@@ -53,6 +81,11 @@ from kcd_mod_manager.infrastructure.app_updates import (
 )
 from kcd_mod_manager.infrastructure.archives import is_supported_archive, rar_support_available
 from kcd_mod_manager.infrastructure.conflict_scanner import ScanCancelled
+from kcd_mod_manager.infrastructure.game_detection import (
+    EXECUTABLE_NAME,
+    is_usable_game_version,
+    path_volume_missing,
+)
 from kcd_mod_manager.infrastructure.nexus import (
     NexusError,
     NexusPremiumRequired,
@@ -87,18 +120,27 @@ from kcd_mod_manager.ui.tasks import GuiInvoker, TaskRunner
 from kcd_mod_manager.ui.theme import apply_theme, current_palette, palette_for
 from kcd_mod_manager.ui.widgets import (
     Card,
+    GameRunningOverlay,
     IconButton,
     LoadingOverlay,
     Pill,
     RoundedMenu,
     SearchBox,
     ThemedIcon,
+    ToggleSwitch,
     footer_bar,
     hline,
     label,
     primary_button,
     refresh_theme,
     secondary_button,
+    themed_icon,
+)
+
+LAUNCH_PRESETS: tuple[tuple[str, str, bool], ...] = (
+    ("LaunchPresetVanilla", "", False),
+    ("LaunchPresetDev", "-devmode", True),
+    ("LaunchPresetDevCfg", "-devmode +exec user.cfg", True),
 )
 
 log = logging.getLogger(__name__)
@@ -126,16 +168,27 @@ class MainWindow(QMainWindow):
 
         self.search = ""
         self.category_filter: str | None = None
+        self.quick_filter = QuickFilter.ALL
         self.sort_mode = SortMode.LOAD_ORDER
         self._updating = False
         self._scan_cancel: threading.Event | None = None
         self._install_queue: list[tuple[Path, int, bool]] = []
+        self._install_total = 0
         self._cover_game: GameType | None = None
         self._app_update_offered = False
         self._game_running = False
+        self._tray_for_game = False
         self._game_timer = QTimer(self)
         self._game_timer.setInterval(2000)
         self._game_timer.timeout.connect(self._refresh_game_running)
+        self._folder_watcher = QFileSystemWatcher(self)
+        self._folder_watcher.directoryChanged.connect(self._mods_folder_changed)
+        self._folder_watcher.fileChanged.connect(self._mods_folder_changed)
+        self._folder_reload_timer = QTimer(self)
+        self._folder_reload_timer.setSingleShot(True)
+        self._folder_reload_timer.setInterval(1000)
+        self._folder_reload_timer.timeout.connect(self._reload_after_folder_change)
+        self._apply_pulse: QPropertyAnimation | None = None
 
         self.setWindowTitle(f"KCD Mod Manager {__version__}")
         icon = resource_path("images", "logo.ico")
@@ -144,6 +197,7 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self.resize(max(self.settings.window_width, 1000), max(self.settings.window_height, 640))
         self._build_ui()
+        self._setup_tray()
         self.tasks.busy_changed.connect(self._set_busy)
         self._restore_geometry()
         self.apply_theme()
@@ -221,29 +275,43 @@ class MainWindow(QMainWindow):
         layout.addLayout(brand)
         layout.addSpacing(10)
 
+        # Full-bleed key art with a compact floating Switch chip (title is in the artwork).
         game_card = Card(sidebar)
-        game_layout = QVBoxLayout(game_card)
-        game_layout.setContentsMargins(12, 10, 12, 12)
-        game_layout.setSpacing(8)
-        game_row = QHBoxLayout()
-        game_row.setSpacing(10)
+        game_card.setObjectName("gameHero")
+        game_card.setFixedHeight(152)
+        game_card.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.game_card = game_card
         self.game_cover = QLabel(game_card)
-        self.game_cover.setFixedSize(64, 36)
-        game_row.addWidget(self.game_cover)
-        game_text = QVBoxLayout()
-        game_text.setSpacing(0)
-        game_text.addWidget(label(tr("SettingsPageGame"), "cardDescription", game_card))
-        self.game_label = label("-", "gameName", game_card, wrap=True)
-        game_text.addWidget(self.game_label)
-        game_row.addLayout(game_text, 1)
-        game_layout.addLayout(game_row)
+        self.game_cover.setObjectName("gameHeroCover")
+        self.game_cover.setScaledContents(False)
+        self.game_cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.game_cover.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        game_layout = QVBoxLayout(game_card)
+        game_layout.setContentsMargins(10, 10, 10, 10)
+        game_layout.setSpacing(0)
         self.switch_game_button = secondary_button(tr("SwitchGameText"), "games")
+        self.switch_game_button.setObjectName("gameHeroButton")
+        self.switch_game_button.setMinimumHeight(26)
+        self.switch_game_button.setMaximumWidth(128)
+        themed_icon(self.switch_game_button, "games", "#FFFFFF", 13)
         self.switch_game_button.clicked.connect(self.switch_game)
-        game_layout.addWidget(self.switch_game_button)
+        game_layout.addWidget(
+            self.switch_game_button, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight
+        )
+        game_layout.addStretch(1)
+        game_card.installEventFilter(self)
         layout.addWidget(game_card)
 
         layout.addSpacing(8)
-        layout.addWidget(self._caption(tr("SidebarProfile"), sidebar))
+        profile_caption = QHBoxLayout()
+        profile_caption.setContentsMargins(0, 0, 0, 0)
+        profile_caption.setSpacing(8)
+        profile_caption.addWidget(self._caption(tr("SidebarProfile"), sidebar))
+        self.profile_badge = Pill("", "neutral", sidebar)
+        self.profile_badge.hide()
+        profile_caption.addWidget(self.profile_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        profile_caption.addStretch(1)
+        layout.addLayout(profile_caption)
         self.profile_combo = QComboBox(sidebar)
         self.profile_combo.setMinimumHeight(30)
         self.profile_combo.currentIndexChanged.connect(self._profile_selected)
@@ -314,6 +382,19 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.settings_nav)
         layout.addStretch(1)
 
+        theme_row = QHBoxLayout()
+        theme_row.setContentsMargins(4, 0, 4, 0)
+        theme_row.setSpacing(8)
+        theme_row.addWidget(label(tr("SidebarTheme"), "hint", sidebar), 0, Qt.AlignmentFlag.AlignVCenter)
+        theme_row.addStretch(1)
+        self.theme_toggle = ToggleSwitch(sidebar)
+        self.theme_toggle.setChecked(self.settings.is_dark_mode)
+        self.theme_toggle.setToolTip(tr("SettingsDarkModeDesc"))
+        self.theme_toggle.toggled.connect(self._theme_toggled)
+        theme_row.addWidget(self.theme_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(theme_row)
+        layout.addSpacing(6)
+
         account = QFrame(sidebar)
         account.setObjectName("card")
         account_layout = QVBoxLayout(account)
@@ -376,6 +457,14 @@ class MainWindow(QMainWindow):
         self.category_combo.currentIndexChanged.connect(self._category_filter_changed)
         category_layout.addWidget(self.category_combo)
         filters.addWidget(self.category_row)
+        self.quick_filter_combo = QComboBox()
+        self.quick_filter_combo.setMinimumHeight(34)
+        self.quick_filter_combo.setToolTip(tr("FilterQuickTooltip"))
+        self.quick_filter_combo.addItem(tr("FilterQuickAll"), QuickFilter.ALL)
+        self.quick_filter_combo.addItem(tr("FilterQuickConflicts"), QuickFilter.CONFLICTS)
+        self.quick_filter_combo.addItem(tr("FilterQuickUpdates"), QuickFilter.UPDATES)
+        self.quick_filter_combo.currentIndexChanged.connect(self._quick_filter_changed)
+        filters.addWidget(self.quick_filter_combo)
         filters.addStretch(1)
         self.sort_button = secondary_button("", "sort")
         self.sort_button.setMinimumHeight(34)
@@ -385,6 +474,12 @@ class MainWindow(QMainWindow):
         self.reload_button.setMinimumHeight(34)
         self.reload_button.clicked.connect(self.reload)
         filters.addWidget(self.reload_button)
+        self.open_mods_button = IconButton("folder", tooltip=tr("ButtonOpenModsFolder"))
+        self.open_mods_button.clicked.connect(self.open_mods_folder)
+        filters.addWidget(self.open_mods_button)
+        self.open_order_button = IconButton("sort", tooltip=tr("ButtonOpenModOrder"))
+        self.open_order_button.clicked.connect(self.open_mod_order_file)
+        filters.addWidget(self.open_order_button)
         page.addLayout(filters)
 
         actions = QHBoxLayout()
@@ -393,6 +488,16 @@ class MainWindow(QMainWindow):
         self.enable_all_button.clicked.connect(lambda: self.set_all_enabled(True))
         self.disable_all_button = secondary_button(tr("DisableAllModsText"), "dismiss")
         self.disable_all_button.clicked.connect(lambda: self.set_all_enabled(False))
+        self.dirty_badge = Pill(tr("OrderPendingBadge"), "warning")
+        self.dirty_badge.hide()
+        self.apply_order_button = primary_button(tr("ButtonApplyOrder"), "checkmark_filled")
+        self.apply_order_button.clicked.connect(self.apply_pending_order)
+        self.apply_order_button.hide()
+        self.revert_order_button = secondary_button(tr("ButtonRevertOrder"), "history")
+        self.revert_order_button.clicked.connect(self.revert_pending_order)
+        self.revert_order_button.hide()
+        self.import_order_button = secondary_button(tr("ButtonImportOrder"), "folder")
+        self.import_order_button.clicked.connect(self.import_mod_order)
         self.update_manifests_button = secondary_button(tr("UpdateAllManifestsText"), "update")
         self.update_manifests_button.clicked.connect(self.update_all_manifests)
         self.compact_button = secondary_button(tr("ButtonCompactView"), "apps_list")
@@ -402,10 +507,15 @@ class MainWindow(QMainWindow):
         self.compact_button.toggled.connect(self._compact_toggled)
         actions.addWidget(self.enable_all_button)
         actions.addWidget(self.disable_all_button)
+        actions.addWidget(self.dirty_badge)
+        actions.addWidget(self.apply_order_button)
+        actions.addWidget(self.revert_order_button)
         actions.addStretch(1)
+        actions.addWidget(self.import_order_button)
         actions.addWidget(self.compact_button)
         actions.addWidget(self.update_manifests_button)
         page.addLayout(actions)
+        QShortcut(QKeySequence.StandardKey.Save, self, self.apply_pending_order)
 
         self.list_host = QWidget()
         list_layout = QVBoxLayout(self.list_host)
@@ -427,6 +537,7 @@ class MainWindow(QMainWindow):
         self.list_view.verticalScrollBar().setSingleStep(16)
         self.list_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list_view.customContextMenuRequested.connect(self._context_menu_at)
+        self.list_view.doubleClicked.connect(self._mod_double_clicked)
         self.delegate = ModDelegate(
             self.list_view, palette_for(self.settings.is_dark_mode), self.settings.is_dark_mode
         )
@@ -436,6 +547,8 @@ class MainWindow(QMainWindow):
         self.list_view.setItemDelegate(self.delegate)
         list_layout.addWidget(self.list_view)
         self.loading_overlay = LoadingOverlay(self.list_host, tr("LoadingModsText"))
+        self.game_overlay = GameRunningOverlay(self.list_host, tr("GameRunningOverlayText"))
+        self.game_overlay.stop_requested.connect(self.stop_game)
         page.addWidget(self.list_host, 1)
         return page
 
@@ -447,7 +560,25 @@ class MainWindow(QMainWindow):
         self.status_progress.setFixedSize(160, 6)
         self.status_progress.hide()
         footer.addWidget(self.status_progress, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.game_running_pill = Pill(tr("ButtonGameRunning"), "warning")
+        self.game_running_pill.hide()
+        footer.addWidget(self.game_running_pill, 0, Qt.AlignmentFlag.AlignVCenter)
         footer.addStretch(1)
+
+        self.dev_mode_toggle = ToggleSwitch()
+        self.dev_mode_toggle.setChecked(self.settings.is_dev_mode)
+        self.dev_mode_toggle.setToolTip(tr("SettingsDevModeDesc"))
+        self.dev_mode_toggle.toggled.connect(self._dev_mode_toggled)
+        footer.addWidget(label(tr("FooterDevMode"), "hint"), 0, Qt.AlignmentFlag.AlignVCenter)
+        footer.addWidget(self.dev_mode_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.store_launch_toggle = ToggleSwitch()
+        self.store_launch_toggle.setToolTip(tr("SettingsLaunchViaStoreDesc"))
+        self.store_launch_toggle.toggled.connect(self._store_launch_toggled)
+        self._sync_store_launch_toggle()
+        footer.addWidget(label(tr("FooterStoreLaunch"), "hint"), 0, Qt.AlignmentFlag.AlignVCenter)
+        footer.addWidget(self.store_launch_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
+
         self.add_button = secondary_button(tr("ButtonAddMod"), "add")
         self.add_button.setMinimumSize(130, 40)
         self._add_menu = RoundedMenu("", self.add_button)
@@ -455,6 +586,18 @@ class MainWindow(QMainWindow):
         self._add_menu.addAction(tr("AddModFolder") + "...", self.add_mod_folder)
         self.add_button.clicked.connect(self._show_add_menu)
         footer.addWidget(self.add_button)
+
+        self.preset_button = QToolButton()
+        self.preset_button.setText(tr("LaunchPresets"))
+        self.preset_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.preset_button.setMinimumHeight(40)
+        self.preset_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        preset_menu = RoundedMenu("", self.preset_button)
+        for key, args, dev in LAUNCH_PRESETS:
+            preset_menu.addAction(tr(key), lambda a=args, d=dev: self.apply_launch_preset(a, d))
+        self.preset_button.setMenu(preset_menu)
+        footer.addWidget(self.preset_button)
+
         self.start_button = primary_button(tr("ButtonStartGame"), "play_filled")
         self.start_button.setMinimumWidth(180)
         self.start_button.clicked.connect(self._start_or_stop_game)
@@ -484,36 +627,71 @@ class MainWindow(QMainWindow):
         else:
             self.loading_overlay.hide()
 
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is getattr(self, "game_card", None):
+            if event.type() == QEvent.Type.Resize:
+                self.game_cover.setGeometry(self.game_card.rect())
+                self._refresh_game_cover()
+            elif event.type() == QEvent.Type.MouseButtonRelease and isinstance(event, QMouseEvent):
+                if event.button() == Qt.MouseButton.LeftButton and not self.switch_game_button.underMouse():
+                    self.switch_game()
+                    return True
+        return super().eventFilter(watched, event)
+
     def _refresh_game_cover(self) -> None:
         game = self.session.game
         if game is None:
             self.game_cover.clear()
+            self.game_card.setToolTip("")
             return
+        title = tr(game.display_key)
+        self.game_card.setToolTip(title)
+        self.game_card.setAccessibleName(title)
         image = QPixmap(str(resource_path("images", "kcd1.jpg" if game is GameType.KCD1 else "kcd2.jpg")))
         if image.isNull():
             return
         ratio = self.devicePixelRatioF()
-        size = self.game_cover.size() * ratio
+        target = self.game_card.size()
+        if target.width() < 8 or target.height() < 8:
+            return
+        self.game_cover.setGeometry(0, 0, target.width(), target.height())
+        # Slight zoom so key art never shows letterboxed edges inside the rounded frame.
+        size = target * ratio
+        zoom = 1.06
         scaled = image.scaled(
-            size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation
+            int(size.width() * zoom),
+            int(size.height() * zoom),
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
         )
         crop = scaled.copy(
-            (scaled.width() - size.width()) // 2,
-            (scaled.height() - size.height()) // 2,
-            size.width(),
-            size.height(),
+            max(0, (scaled.width() - size.width()) // 2),
+            max(0, (scaled.height() - size.height()) // 2),
+            int(size.width()),
+            int(size.height()),
         )
         rounded = QPixmap(crop.size())
         rounded.fill(Qt.GlobalColor.transparent)
         painter = QPainter(rounded)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         path = QPainterPath()
-        path.addRoundedRect(0, 0, crop.width(), crop.height(), 4 * ratio, 4 * ratio)
+        radius = 10 * ratio
+        path.addRoundedRect(0, 0, crop.width(), crop.height(), radius, radius)
         painter.setClipPath(path)
         painter.drawPixmap(0, 0, crop)
+        # Corner scrim only under the floating Switch chip (top-right).
+        scrim_h = max(1, int(size.height() * 0.38))
+        scrim_w = max(1, int(size.width() * 0.62))
+        gradient = QLinearGradient(size.width(), 0, size.width() - scrim_w, scrim_h)
+        gradient.setColorAt(0.0, QColor(0, 0, 0, 160))
+        gradient.setColorAt(0.55, QColor(0, 0, 0, 70))
+        gradient.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.fillRect(int(size.width() - scrim_w), 0, scrim_w, scrim_h, gradient)
         painter.end()
         rounded.setDevicePixelRatio(ratio)
         self.game_cover.setPixmap(rounded)
+        self.game_cover.lower()
+        self.switch_game_button.raise_()
 
     # ================================================================== theme & geometry
     def apply_theme(self) -> None:
@@ -524,6 +702,10 @@ class MainWindow(QMainWindow):
             refresh_theme(self)
             self.account_icon.setPixmap(icons.pixmap("person", palette.text_secondary, 16))
             self.list_view.viewport().update()
+            if getattr(self, "theme_toggle", None) is not None:
+                self.theme_toggle.blockSignals(True)
+                self.theme_toggle.setChecked(self.settings.is_dark_mode)
+                self.theme_toggle.blockSignals(False)
 
     def _restore_geometry(self) -> None:
         if self.settings.window_geometry:
@@ -540,8 +722,22 @@ class MainWindow(QMainWindow):
         self._save_settings()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self.session.order_dirty:
+            choice = dialogs.ask_unsaved_order(self, tr("CloseUnsavedOrder"))
+            if choice == "apply":
+                if not self._guard(self.session.apply_pending_order, "ErrorSavingModOrder"):
+                    event.ignore()
+                    return
+                self._refresh_order_buttons()
+            elif choice == "discard":
+                self.session.revert_pending_order()
+            else:
+                event.ignore()
+                return
         if self._scan_cancel is not None:
             self._scan_cancel.set()
+        if getattr(self, "tray", None) is not None:
+            self.tray.hide()
         self._save_geometry()
         self.tasks.wait(15000)
         super().closeEvent(event)
@@ -607,7 +803,17 @@ class MainWindow(QMainWindow):
 
     @property
     def reorder_allowed(self) -> bool:
-        return self.sort_mode is SortMode.LOAD_ORDER and not self.search.strip()
+        return (
+            self.sort_mode is SortMode.LOAD_ORDER
+            and not self.search.strip()
+            and self.quick_filter is QuickFilter.ALL
+        )
+
+    def _conflict_ids(self) -> frozenset[str]:
+        ids: set[str] = set()
+        for group in self.session.conflicts:
+            ids.update(group.mod_ids)
+        return frozenset(ids)
 
     def _button_enabled(self, mod: Mod, name: str) -> bool:
         if name in ("up", "down"):
@@ -620,7 +826,13 @@ class MainWindow(QMainWindow):
 
     def visible(self) -> list[Mod]:
         return visible_mods(
-            self.session.mods, self.search, self.category_filter, self.sort_mode, self.session.categories
+            self.session.mods,
+            self.search,
+            self.category_filter,
+            self.sort_mode,
+            self.session.categories,
+            quick_filter=self.quick_filter,
+            conflict_ids=self._conflict_ids() if self.quick_filter is QuickFilter.CONFLICTS else None,
         )
 
     # ================================================================== view refresh
@@ -652,17 +864,23 @@ class MainWindow(QMainWindow):
             if shown != total:
                 subtitle += f"  \u00b7  {tr('ModsPageShown', shown)}"
             self.page_subtitle.setText(subtitle)
-            searching = bool(self.search.strip())
+            searching = bool(self.search.strip()) or self.quick_filter is not QuickFilter.ALL
             self.sort_button.setText(
                 tr("ButtonSortDisabled") if searching else tr(SORT_LABELS[self.sort_mode])
             )
-            self.sort_button.setEnabled(not searching and not self.tasks.busy)
+            self.sort_button.setEnabled(
+                not self.search.strip()
+                and self.quick_filter is QuickFilter.ALL
+                and not self.tasks.busy
+            )
             self._refresh_categories_combo()
             self._refresh_profiles_combo()
+            self._refresh_profile_badge()
             game = self.session.game
-            self.game_label.setText(tr(game.display_key) if game else "-")
             if game is not self._cover_game:
                 self._cover_game = game
+                self._refresh_game_cover()
+            elif game is not None:
                 self._refresh_game_cover()
             self._refresh_account()
             count = len(self.session.conflicts)
@@ -670,8 +888,61 @@ class MainWindow(QMainWindow):
             self.conflict_badge.setVisible(count > 0)
             self._refresh_conflict_button()
             self.category_row.setVisible(bool(self.session.categories))
+            self._refresh_order_buttons()
+            self._refresh_conflict_marks()
+            version = self.session.install.game_version if self.session.install else None
+            if is_usable_game_version(version):
+                self.page_subtitle.setToolTip(tr("GameVersionTooltip", version))
+            else:
+                self.page_subtitle.setToolTip("")
         finally:
             self._updating = False
+
+    def _refresh_profile_badge(self) -> None:
+        name = self.session.selected_profile or ""
+        self.profile_badge.setText(name)
+        self.profile_badge.setVisible(bool(name))
+        self.profile_badge.setToolTip(tr("ProfileActiveTooltip", name) if name else "")
+
+    def _refresh_order_buttons(self) -> None:
+        dirty = self.session.order_dirty
+        self.apply_order_button.setVisible(dirty)
+        self.revert_order_button.setVisible(dirty)
+        self.dirty_badge.setVisible(dirty)
+        self._set_apply_pulse(dirty and not self._game_running)
+        if dirty and not self._game_running:
+            self.status(tr("StatusOrderDirty"))
+
+    def _set_apply_pulse(self, active: bool) -> None:
+        effect = self.apply_order_button.graphicsEffect()
+        if not isinstance(effect, QGraphicsOpacityEffect):
+            effect = QGraphicsOpacityEffect(self.apply_order_button)
+            self.apply_order_button.setGraphicsEffect(effect)
+        if self._apply_pulse is None:
+            self._apply_pulse = QPropertyAnimation(effect, b"opacity", self)
+            self._apply_pulse.setStartValue(1.0)
+            self._apply_pulse.setKeyValueAt(0.5, 0.55)
+            self._apply_pulse.setEndValue(1.0)
+            self._apply_pulse.setDuration(1100)
+            self._apply_pulse.setEasingCurve(QEasingCurve.Type.InOutSine)
+            self._apply_pulse.setLoopCount(-1)
+        if active:
+            if self._apply_pulse.state() != QPropertyAnimation.State.Running:
+                self._apply_pulse.start()
+        else:
+            self._apply_pulse.stop()
+            effect.setOpacity(1.0)
+
+    def _refresh_conflict_marks(self) -> None:
+        winners: set[str] = set()
+        participants: set[str] = set()
+        for group in self.session.conflicts:
+            if not group.mod_ids:
+                continue
+            participants.update(group.mod_ids)
+            winners.add(group.mod_ids[-1])
+        self.delegate.conflict_winners = winners
+        self.delegate.conflict_participants = participants - winners
 
     def _refresh_categories_combo(self) -> None:
         combo = self.category_combo
@@ -699,6 +970,7 @@ class MainWindow(QMainWindow):
         else:
             combo.setCurrentIndex(-1)
         combo.blockSignals(False)
+        self._refresh_profile_badge()
 
     def _refresh_account(self) -> None:
         nexus = self.ctx.nexus
@@ -776,7 +1048,16 @@ class MainWindow(QMainWindow):
         self.search_edit.blockSignals(True)
         self.search_edit.clear()
         self.search_edit.blockSignals(False)
-        self.search, self.category_filter, self.sort_mode = "", None, SortMode.LOAD_ORDER
+        self.quick_filter_combo.blockSignals(True)
+        self.quick_filter_combo.setCurrentIndex(0)
+        self.quick_filter_combo.blockSignals(False)
+        self.search, self.category_filter, self.quick_filter, self.sort_mode = (
+            "",
+            None,
+            QuickFilter.ALL,
+            SortMode.LOAD_ORDER,
+        )
+        self._sync_store_launch_toggle()
         self.refresh_view()
         self.status(tr("LoadingModsText"))
         self._show_loading(True)
@@ -791,6 +1072,7 @@ class MainWindow(QMainWindow):
 
         def done(_: object) -> None:
             self._show_loading(False)
+            self._watch_mods_folder()
             self.refresh_view()
             self.status(tr("StatusReady"))
             self.scan_conflicts()
@@ -808,6 +1090,9 @@ class MainWindow(QMainWindow):
         dialogs.error(self, f"{prefix}\n\n{exc}")
 
     def reload(self) -> None:
+        if self.session.order_dirty:
+            self.status(tr("StatusExternalChangesWhileDirty"))
+            return
         self.status(tr("LoadingModsText"))
         self._show_loading(True)
 
@@ -816,7 +1101,9 @@ class MainWindow(QMainWindow):
 
         def done(_: object) -> None:
             self._show_loading(False)
+            self._watch_mods_folder()
             self.status(tr("StatusReady"))
+            self.refresh_view()
 
         def failed(exc: BaseException) -> None:
             self._show_loading(False)
@@ -824,14 +1111,154 @@ class MainWindow(QMainWindow):
 
         self.tasks.run(work, done, failed)
 
+    def apply_pending_order(self) -> None:
+        if self._guard(self.session.apply_pending_order, "ErrorSavingModOrder"):
+            self.status(tr("StatusOrderApplied"))
+        self.refresh_view()
+
+    def revert_pending_order(self) -> None:
+        self.session.revert_pending_order()
+        self.status(tr("StatusOrderReverted"))
+        self.refresh_view()
+
+    def import_mod_order(self) -> None:
+        if self._mod_actions_blocked():
+            return
+        start = str(self.session.mods_dir) if self.session.install else ""
+        path, _ = QFileDialog.getOpenFileName(
+            self, tr("ButtonImportOrder"), start, "mod_order.txt (*.txt);;All files (*.*)"
+        )
+        if not path:
+            return
+        count: list[int] = []
+        if self._guard(lambda: count.append(self.session.import_mod_order(Path(path))), "ErrorImportOrder"):
+            self.status(tr("StatusOrderImported", count[0] if count else 0))
+        self.refresh_view()
+
+    def _watch_mods_folder(self) -> None:
+        for path in list(self._folder_watcher.directories()) + list(self._folder_watcher.files()):
+            self._folder_watcher.removePath(path)
+        install = self.session.install
+        if install is None:
+            return
+        mods = str(install.mods_path)
+        if Path(mods).is_dir():
+            self._folder_watcher.addPath(mods)
+        order = install.mods_path / "mod_order.txt"
+        if order.is_file():
+            self._folder_watcher.addPath(str(order))
+
+    def _mods_folder_changed(self, _path: str) -> None:
+        if self.session.disk_writes_suppressed or self.tasks.busy:
+            return
+        self._folder_reload_timer.start()
+
+    def _reload_after_folder_change(self) -> None:
+        if self.session.disk_writes_suppressed or self.tasks.busy:
+            return
+        if self.session.order_dirty:
+            self.status(tr("StatusExternalChangesWhileDirty"))
+            return
+        self.status(tr("StatusExternalModsChanged"))
+        self.reload()
+
+    def open_mods_folder(self) -> None:
+        install = self.session.install
+        if install is None:
+            return
+        self._open(install.mods_path)
+
+    def open_mod_order_file(self) -> None:
+        install = self.session.install
+        if install is None:
+            return
+        path = self.session.order_files.active_file(install.mods_path, self.settings.mod_order_enabled)
+        if path.is_file():
+            self._open(path)
+        else:
+            self._open(install.mods_path)
+
+    def _dev_mode_toggled(self, checked: bool) -> None:
+        if self.settings.is_dev_mode == checked:
+            return
+        self.settings.is_dev_mode = checked
+        self.session.save_settings()
+
+    def _sync_store_launch_toggle(self) -> None:
+        game = self.session.game
+        if game is not None:
+            value = self.settings.launch_via_store_for(game)
+        else:
+            value = self.settings.launch_via_store
+        self.store_launch_toggle.blockSignals(True)
+        self.store_launch_toggle.setChecked(value)
+        self.store_launch_toggle.blockSignals(False)
+
+    def _store_launch_toggled(self, checked: bool) -> None:
+        game = self.session.game
+        if game is not None:
+            if self.settings.launch_via_store_for(game) == checked:
+                return
+            self.settings.set_launch_via_store_for(game, checked)
+        else:
+            if self.settings.launch_via_store == checked:
+                return
+            self.settings.launch_via_store = checked
+        self.session.save_settings()
+
+    def _theme_toggled(self, checked: bool) -> None:
+        if self.settings.is_dark_mode == checked:
+            return
+        self.settings.is_dark_mode = checked
+        self.session.save_settings()
+        self.apply_theme()
+
+    def _quick_filter_changed(self, index: int) -> None:
+        data = self.quick_filter_combo.itemData(index)
+        if isinstance(data, QuickFilter):
+            self.quick_filter = data
+        elif isinstance(data, str):
+            try:
+                self.quick_filter = QuickFilter(data)
+            except ValueError:
+                self.quick_filter = QuickFilter.ALL
+        else:
+            self.quick_filter = QuickFilter.ALL
+        self.refresh_view()
+
+    def _mod_double_clicked(self, index: QModelIndex) -> None:
+        mod = self.model.mod_at(index.row()) if index.isValid() else None
+        if mod is not None and mod.path is not None:
+            self._open(mod.path)
+
+    def apply_launch_preset(self, args: str, dev_mode: bool) -> None:
+        self.settings.game_launch_args = args
+        self.settings.is_dev_mode = dev_mode
+        self.dev_mode_toggle.blockSignals(True)
+        self.dev_mode_toggle.setChecked(dev_mode)
+        self.dev_mode_toggle.blockSignals(False)
+        self.session.save_settings()
+        self.status(tr("StatusLaunchPresetApplied", args or tr("LaunchPresetVanilla")))
+
     # ================================================================== profiles
     def _profile_selected(self, index: int) -> None:
         if self._updating or index < 0:
             return
         name = self.profile_combo.itemText(index)
-        if name and name != self.session.selected_profile:
-            self._guard(lambda: self.session.apply_profile(name), "ErrorLoadingProfile")
-            self.refresh_view()
+        if not name or name == self.session.selected_profile:
+            return
+        profile = self.session.profile_store.load(self.session.game, name) if self.session.game else None
+        if profile is not None:
+            summary = prof.describe_switch(self.session.mods, profile)
+            if summary and not dialogs.confirm(
+                self, tr("ProfileSwitchConfirm", name, summary), tr("ProfileSwitchTitle")
+            ):
+                self._updating = True
+                self._refresh_profiles_combo()
+                self._updating = False
+                return
+        self._guard(lambda: self.session.apply_profile(name), "ErrorLoadingProfile")
+        self.refresh_view()
 
     def create_profile(self) -> None:
         name = dialogs.ask_text(self, tr("CreateProfileText"), tr("EnterProfileName"))
@@ -1055,8 +1482,20 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         add("UpdateManifestText", lambda: self.update_manifests([mod]), local)
         add("ToolTipOpenFolder", lambda: self._row_action("folder", mod, QPoint()), mod.path is not None)
+        add("ContextMenuCopyFolderName", lambda: self._copy_text(mod.id))
+        add(
+            "ContextMenuCopyPath",
+            lambda: self._copy_text(str(mod.path) if mod.path else ""),
+            mod.path is not None,
+        )
         add("ToolTipDeleteMod", lambda: self.delete_mod(mod), local)
         return menu
+
+    def _copy_text(self, text: str) -> None:
+        if not text:
+            return
+        QApplication.clipboard().setText(text)
+        self.status(tr("StatusCopiedClipboard"))
 
     # ================================================================== per-mod edits
     def rename_mod(self, mod: Mod) -> None:
@@ -1133,7 +1572,7 @@ class MainWindow(QMainWindow):
         if self._mod_actions_blocked():
             return
         install = self.session.install
-        if install is None or not install.game_version:
+        if install is None or not is_usable_game_version(install.game_version):
             dialogs.error(self, tr("CouldNotDetectGameVersion"))
             return
         if dialogs.confirm(self, tr("UpdateAllManifestsMessage", install.game_version)):
@@ -1160,6 +1599,7 @@ class MainWindow(QMainWindow):
     def install_paths(self, paths: list[Path]) -> None:
         if self.session.install is None or self._mod_actions_blocked():
             return
+        before = len(self._install_queue)
         for path in paths:
             if path.is_dir():
                 self._install_queue.append((path, -1, False))
@@ -1178,14 +1618,28 @@ class MainWindow(QMainWindow):
                 self._install_queue.append((path, number, False))
             else:
                 dialogs.error(self, f"{tr('StatusModInstallFailed')}: {path.name}")
+        added = len(self._install_queue) - before
+        if added:
+            self._install_total = (0 if before == 0 else self._install_total) + added
         if self._install_queue and not self.tasks.busy:
             self._install_next()
 
     def _install_next(self) -> None:
         if not self._install_queue:
+            self._install_total = 0
             return
+        remaining = len(self._install_queue)
+        total = max(self._install_total, remaining)
+        done_count = total - remaining + 1
         path, number, generate = self._install_queue.pop(0)
-        self.status(tr("StatusInstallingModFromFolder" if path.is_dir() else "StatusInstallingMod"))
+        self.status(
+            tr(
+                "StatusInstallingProgress",
+                done_count,
+                total,
+                path.name,
+            )
+        )
 
         def work() -> InstallResult:
             if path.is_dir():
@@ -1243,15 +1697,23 @@ class MainWindow(QMainWindow):
             self.enable_all_button,
             self.disable_all_button,
             self.update_manifests_button,
+            self.import_order_button,
+            self.apply_order_button,
+            self.revert_order_button,
         ):
             widget.setEnabled(not running)
+        self.game_running_pill.setVisible(running)
+        if running:
+            self.game_overlay.show_overlay(tr("GameRunningOverlayText"), tr("ButtonStopGame"))
+            self.list_view.setEnabled(False)
+        else:
+            self.game_overlay.hide()
+            self.list_view.setEnabled(True)
+        self._refresh_tray(running)
 
     def _mod_actions_blocked(self) -> bool:
-        """True while the game runs: the manager must not change mods or their order now."""
-        if not self._game_running:
-            return False
-        self.status(tr("ModActionsLockedWhileRunning"))
-        return True
+        """True while the game runs: overlay is the signal — no toast/popup."""
+        return self._game_running
 
     def _start_or_stop_game(self) -> None:
         if self._game_running:
@@ -1276,26 +1738,98 @@ class MainWindow(QMainWindow):
     def start_game(self) -> None:
         install = self.session.install
         if install is None:
-            dialogs.error(self, tr("ErrorGameInstallationNotFound"))
+            if not self._recover_missing_install():
+                dialogs.error(self, tr("ErrorGameInstallationNotFound"))
             return
+        if path_volume_missing(install.root_path) or not install.executable_path.is_file():
+            if not self._recover_missing_install():
+                return
+            install = self.session.install
+            if install is None:
+                return
         self._refresh_game_running()
         if self._game_running:
             self.status(tr("ButtonGameRunning"))
             dialogs.info(self, tr("GameAlreadyRunning"))
             return
-        if not self._guard(self.session.save_mod_order):
+        if self.session.order_dirty:
+            if not self._guard(self.session.apply_pending_order, "ErrorSavingModOrder"):
+                return
+            self.refresh_view()
+        elif not self._guard(self.session.save_mod_order):
             return
         self.status(tr("StatusStartingGame"))
         try:
-            result = launch_game(install, self.settings.game_launch_args, self.settings.is_dev_mode)
+            result = launch_game(
+                install,
+                self.settings.game_launch_args,
+                self.settings.is_dev_mode,
+                via_store=self.settings.launch_via_store_for(install.game),
+            )
         except (LaunchError, OSError) as exc:
             self.status(tr("StatusFailedToStartGame"))
-            dialogs.error(self, tr("FailedToStartGame", exc))
+            if self._is_missing_volume_error(exc):
+                self._recover_missing_install()
+            else:
+                dialogs.error(self, tr("FailedToStartGame", exc))
             return
         self.status(tr("StatusGameStarted"))
         QTimer.singleShot(600, self._refresh_game_running)
-        if not result.arguments_applied:
+        if not result.arguments_applied and result.method.startswith("steam"):
             dialogs.info(self, tr("SteamUrlNoArgs"))
+        elif not result.arguments_applied and result.method == "epic":
+            dialogs.info(self, tr("EpicLaunchArgsHint"))
+
+    @staticmethod
+    def _is_missing_volume_error(exc: BaseException) -> bool:
+        if isinstance(exc, FileNotFoundError):
+            return True
+        if isinstance(exc, OSError):
+            winerror = getattr(exc, "winerror", None)
+            if winerror in (3, 15, 21):  # path not found / no volume / not ready
+                return True
+            text = str(exc).casefold()
+            return "device" in text or "volume" in text or "does not exist" in text
+        return False
+
+    def _recover_missing_install(self) -> bool:
+        """Ask the user to browse or re-detect when a saved path's drive is gone."""
+        game = self.session.game
+        if game is None:
+            return False
+        saved = self.settings.game_path(game) or "?"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr("MissingInstallTitle"))
+        box.setText(tr("MissingInstallMessage", saved))
+        browse = box.addButton(tr("MissingInstallBrowse"), QMessageBox.ButtonRole.AcceptRole)
+        redetect = box.addButton(tr("MissingInstallRedetect"), QMessageBox.ButtonRole.ActionRole)
+        box.addButton(tr("MissingInstallKeep"), QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is browse:
+            path, _ = QFileDialog.getOpenFileName(
+                self, tr("SelectGameExecutable"), "", f"{EXECUTABLE_NAME} ({EXECUTABLE_NAME})"
+            )
+            if not path:
+                return False
+            try:
+                self.session.set_manual_install(game, Path(path))
+            except SessionError as exc:
+                dialogs.error(self, str(exc))
+                return False
+            self.load_game(game)
+            return True
+        if clicked is redetect:
+            self.settings.set_game_path(game, "")
+            self.session.save_settings()
+            self.session.detect_games()
+            if self.session.installs.get(game) is not None:
+                self.load_game(game)
+                return True
+            dialogs.error(self, tr("ErrorGameInstallationNotFound"))
+            return False
+        return False
 
     # ================================================================== conflicts
     def scan_conflicts(self, then_show: bool = False) -> None:
@@ -1565,7 +2099,10 @@ class MainWindow(QMainWindow):
             if summary.rate_limited:
                 self.status(tr("UpdatesCheckRateLimited"))
             else:
-                self.status(tr("ModUpdatesAvailable", len(summary.updates)))
+                count = len(summary.updates)
+                self.status(tr("ModUpdatesAvailable", count))
+                if count and self.settings.enable_update_notifications:
+                    self._notify_updates(count)
 
         self.tasks.run(self.session.check_all_updates, done, lambda e: self._task_failed(e), serial=False)
 
@@ -1665,6 +2202,12 @@ class MainWindow(QMainWindow):
             open_backups=self._open_backups,
         )
         SettingsDialog(self, self.settings, self.session.installs, hooks).exec()
+        self.dev_mode_toggle.blockSignals(True)
+        self.dev_mode_toggle.setChecked(self.settings.is_dev_mode)
+        self.dev_mode_toggle.blockSignals(False)
+        if self.session.game is not None:
+            self.settings.set_launch_via_store_for(self.session.game, self.settings.launch_via_store)
+        self._sync_store_launch_toggle()
         self.refresh_view()
 
     def _open_backups(self) -> None:
@@ -1714,3 +2257,61 @@ class MainWindow(QMainWindow):
             if widget is not self and widget.isVisible() and widget.isModal():
                 widget.close()
         self.close()
+
+    # ================================================================== tray & notifications
+    def _setup_tray(self) -> None:
+        self.tray: QSystemTrayIcon | None = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        tray = QSystemTrayIcon(self.windowIcon() or QIcon(), self)
+        tray.setToolTip(f"KCD Mod Manager {__version__}")
+        menu = RoundedMenu("", self)
+        menu.addAction(tr("TrayShowWindow"), self._show_from_tray)
+        menu.addAction(tr("ButtonStopGame"), self.stop_game)
+        menu.addSeparator()
+        menu.addAction(tr("SettingsClose"), self.close)
+        tray.setContextMenu(menu)
+        tray.activated.connect(self._tray_activated)
+        self.tray = tray
+
+    def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._show_from_tray()
+
+    def _show_from_tray(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _refresh_tray(self, running: bool) -> None:
+        tray = getattr(self, "tray", None)
+        if tray is None:
+            return
+        if running:
+            tray.setToolTip(tr("TrayGameRunning"))
+            if not tray.isVisible():
+                tray.show()
+            self._tray_for_game = True
+        elif self._tray_for_game:
+            tray.hide()
+            self._tray_for_game = False
+            tray.setToolTip(f"KCD Mod Manager {__version__}")
+
+    def _notify_updates(self, count: int) -> None:
+        tray = getattr(self, "tray", None)
+        if tray is None or not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        was_visible = tray.isVisible()
+        if not was_visible:
+            tray.show()
+        tray.showMessage(
+            tr("NotificationModUpdatesTitle"),
+            tr("ModUpdatesAvailable", count),
+            QSystemTrayIcon.MessageIcon.Information,
+            5000,
+        )
+        if not was_visible and not self._tray_for_game:
+            QTimer.singleShot(6000, lambda: tray.hide() if not self._tray_for_game else None)

@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from kcd_mod_manager.domain import categories as cat
 from kcd_mod_manager.domain import profiles as prof
 from kcd_mod_manager.domain.highlight import preset
-from kcd_mod_manager.domain.library_view import SortMode, matches, next_sort_mode, sort_mods, visible_mods
+from kcd_mod_manager.domain.library_view import (
+    QuickFilter,
+    SortMode,
+    matches,
+    next_sort_mode,
+    sort_mods,
+    visible_mods,
+)
 from kcd_mod_manager.domain.mod_order import (
     OrderEntry,
     apply_order_entries,
@@ -33,6 +42,20 @@ from kcd_mod_manager.domain.versioning import (
 
 def mods(*ids: str) -> list[Mod]:
     return [Mod(id=i, name=i.title(), number=n) for n, i in enumerate(ids, start=1)]
+
+
+def test_describe_profile_switch() -> None:
+    items = mods("a", "b", "c")
+    items[0].is_enabled = True
+    items[1].is_enabled = True
+    profile = ModProfile(
+        profile_name="Vanilla",
+        active_mods=["a"],
+        load_order=["c", "a", "b"],
+    )
+    summary = prof.describe_switch(items, profile)
+    assert "-1" in summary
+    assert "order" in summary
 
 
 class TestVersioning:
@@ -97,6 +120,22 @@ class TestModOrder:
         items[0].number, items[2].number = 3, 1
         items[1].is_enabled = True
         assert serialize_mod_order(items) == ["# c", "b", "# a"]
+
+    def test_serialize_uses_folder_name_when_path_set(self, tmp_path: Path) -> None:
+        items = mods("manifest_id")
+        items[0].is_enabled = True
+        items[0].path = tmp_path / "Folder_Name"
+        assert serialize_mod_order(items) == ["Folder_Name"]
+
+    def test_apply_order_matches_folder_then_legacy_id(self, tmp_path: Path) -> None:
+        folder_mod = Mod(id="legacy_id", name="A", path=tmp_path / "Actual_Folder", number=1)
+        other = Mod(id="other", name="B", path=tmp_path / "other", number=2)
+        ordered = apply_order_entries(
+            [folder_mod, other],
+            [OrderEntry("Actual_Folder", False), OrderEntry("other", True)],
+        )
+        assert [m.path.name if m.path else m.id for m in ordered] == ["Actual_Folder", "other"]
+        assert [m.is_enabled for m in ordered] == [False, True]
 
     def test_round_trip(self) -> None:
         items = mods("a", "b")
@@ -178,6 +217,16 @@ class TestLibraryView:
         assert matches(a, "", None) and matches(b, "", None)
         assert not matches(a, "", "") and matches(b, "", "")
         assert matches(a, "", "CAT-1") and not matches(b, "", "cat-1")
+
+    def test_quick_filter_conflicts_and_updates(self) -> None:
+        a = Mod(id="a", name="A", has_update=True)
+        b = Mod(id="b", name="B")
+        c = Mod(id="c", name="C", has_update=False)
+        assert matches(a, "", None, quick_filter=QuickFilter.UPDATES)
+        assert not matches(b, "", None, quick_filter=QuickFilter.UPDATES)
+        assert matches(a, "", None, quick_filter=QuickFilter.CONFLICTS, conflict_ids={"a", "c"})
+        assert not matches(b, "", None, quick_filter=QuickFilter.CONFLICTS, conflict_ids={"a", "c"})
+        assert matches(c, "", None, quick_filter=QuickFilter.CONFLICTS, conflict_ids={"a", "c"})
 
     def test_sort_cycle(self) -> None:
         assert next_sort_mode(SortMode.LOAD_ORDER, False) is SortMode.TITLE

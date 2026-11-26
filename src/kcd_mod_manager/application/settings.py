@@ -16,6 +16,13 @@ class AppSettings:
     game_launch_args: str = ""
     is_dark_mode: bool = False
     is_dev_mode: bool = False
+    launch_via_store: bool = True
+    """Legacy/global default. Prefer :meth:`launch_via_store_for` — toggles sync the active game."""
+    launch_via_store_kcd1: bool = True
+    launch_via_store_kcd2: bool = True
+    """Per-game store launch. Off = run KingdomCome.exe directly (dev/custom builds)."""
+    backup_order_on_apply: bool = True
+    """Copy ``mod_order.txt`` into the safety folder before Apply writes it."""
     window_width: int = 800
     window_height: int = 600
     window_left: int = 0
@@ -35,7 +42,7 @@ class AppSettings:
     backup_max_count: int = 20
     backup_on_startup: bool = True
     mod_order_enabled: bool = True
-    enable_file_renaming: bool = True
+    enable_file_renaming: bool = False
     allow_workshop_mod_actions: bool = False
     allow_workshop_actions_warning_shown: bool = False
     conflict_detector_only_enabled_mods: bool = True
@@ -69,6 +76,16 @@ class AppSettings:
             self.last_used_profile_kcd1 = value
         else:
             self.last_used_profile_kcd2 = value
+
+    def launch_via_store_for(self, game: GameType) -> bool:
+        return self.launch_via_store_kcd1 if game is GameType.KCD1 else self.launch_via_store_kcd2
+
+    def set_launch_via_store_for(self, game: GameType, value: bool) -> None:
+        if game is GameType.KCD1:
+            self.launch_via_store_kcd1 = value
+        else:
+            self.launch_via_store_kcd2 = value
+        self.launch_via_store = value
 
     def clear_nexus_account(self) -> None:
         self.nexus_username = ""

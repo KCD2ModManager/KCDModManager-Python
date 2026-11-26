@@ -438,3 +438,51 @@ class LoadingOverlay(QWidget):
         color.setAlphaF(0.95)
         painter.fillRect(self.rect(), color)
         painter.end()
+
+
+class GameRunningOverlay(QWidget):
+    """Soft lock over the mod list while the game is running — no blocking dialogs."""
+
+    stop_requested = Signal()
+
+    def __init__(self, parent: QWidget, text: str) -> None:
+        super().__init__(parent)
+        self._host = parent
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(14)
+        self.caption = QLabel(text)
+        self.caption.setObjectName("secondary")
+        self.caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.caption.setWordWrap(True)
+        font = self.caption.font()
+        font.setPixelSize(15)
+        self.caption.setFont(font)
+        self.stop_button = QPushButton()
+        self.stop_button.setObjectName("primaryButton")
+        self.stop_button.setMinimumWidth(160)
+        self.stop_button.clicked.connect(self.stop_requested.emit)
+        layout.addWidget(self.caption, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self.stop_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        parent.installEventFilter(self)
+        self.hide()
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self._host and event.type() == QEvent.Type.Resize:
+            self.setGeometry(self._host.rect())
+        return False
+
+    def show_overlay(self, text: str, stop_label: str) -> None:
+        self.caption.setText(text)
+        self.stop_button.setText(stop_label)
+        self.setGeometry(self._host.rect())
+        self.raise_()
+        self.show()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        painter = QPainter(self)
+        color = QColor(current_palette().panel)
+        color.setAlphaF(0.82)
+        painter.fillRect(self.rect(), color)
+        painter.end()
