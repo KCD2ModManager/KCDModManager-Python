@@ -26,7 +26,7 @@ jobs:
     env:
       NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: List files of the mod page
         run: python3 scripts/nexus_release.py files --game "${{ matrix.game }}" --mod "${{ matrix.mod }}"

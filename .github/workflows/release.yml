@@ -16,7 +16,7 @@ jobs:
       version: ${{ steps.notes.outputs.version }}
       nexus_changelog: ${{ steps.notes.outputs.nexus_changelog }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Extract release notes
         id: notes
@@ -27,7 +27,7 @@ jobs:
           delimiter="EOF_$(openssl rand -hex 8)"
           { echo "nexus_changelog<<$delimiter"; cat nexus-changelog.txt; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: notes
           path: release-notes.md
@@ -42,13 +42,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: release-*
           path: release
           merge-multiple: true
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: notes
 
@@ -131,7 +131,7 @@ jobs:
             echo "mode=skip" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: steps.mode.outputs.mode != 'skip'
 
       - name: Resolve Nexus IDs
@@ -139,7 +139,7 @@ jobs:
         if: steps.mode.outputs.mode != 'skip'
         run: python3 scripts/nexus_release.py resolve --game "${{ matrix.game }}" --mod "${{ matrix.mod }}" --file-version "${{ matrix.file }}"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         if: steps.mode.outputs.mode != 'skip'
         with:
           name: ${{ matrix.variant == 'linux' && 'release-linux' || 'release-windows' }}
