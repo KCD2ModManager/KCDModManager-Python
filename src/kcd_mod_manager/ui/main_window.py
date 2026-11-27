@@ -736,8 +736,9 @@ class MainWindow(QMainWindow):
                 return
         if self._scan_cancel is not None:
             self._scan_cancel.set()
-        if getattr(self, "tray", None) is not None:
-            self.tray.hide()
+        tray = getattr(self, "tray", None)
+        if tray is not None:
+            tray.hide()
         self._save_geometry()
         self.tasks.wait(15000)
         super().closeEvent(event)

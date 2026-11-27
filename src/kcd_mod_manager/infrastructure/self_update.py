@@ -75,10 +75,10 @@ def download_url(version: str, name: str) -> str:
 
 
 def _windows_install_location(executable: Path) -> bool:
-    try:
-        import winreg
-    except ImportError:
+    if sys.platform != "win32":
         return False
+    import winreg
+
     for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
         try:
             with winreg.OpenKey(
