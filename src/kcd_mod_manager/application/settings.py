@@ -72,9 +72,7 @@ class AppSettings:
             self.game_path_kcd2 = value
 
     def game_version_override(self, game: GameType) -> str:
-        return (
-            self.game_version_override_kcd1 if game is GameType.KCD1 else self.game_version_override_kcd2
-        )
+        return self.game_version_override_kcd1 if game is GameType.KCD1 else self.game_version_override_kcd2
 
     def set_game_version_override(self, game: GameType, value: str) -> None:
         text = (value or "").strip()

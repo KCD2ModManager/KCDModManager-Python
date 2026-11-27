@@ -669,9 +669,7 @@ class ManagerSession:
         install = self.install
         if install is None:
             return None
-        return resolve_game_version(
-            install.game_version, self.settings.game_version_override(install.game)
-        )
+        return resolve_game_version(install.game_version, self.settings.game_version_override(install.game))
 
     def update_manifest_game_version(self, mods: Sequence[Mod], version: str | None = None) -> int:
         from kcd_mod_manager.infrastructure.game_detection import is_usable_game_version

@@ -869,9 +869,7 @@ class MainWindow(QMainWindow):
                 tr("ButtonSortDisabled") if searching else tr(SORT_LABELS[self.sort_mode])
             )
             self.sort_button.setEnabled(
-                not self.search.strip()
-                and self.quick_filter is QuickFilter.ALL
-                and not self.tasks.busy
+                not self.search.strip() and self.quick_filter is QuickFilter.ALL and not self.tasks.busy
             )
             self._refresh_categories_combo()
             self._refresh_profiles_combo()
@@ -1590,9 +1588,7 @@ class MainWindow(QMainWindow):
             dialogs.error(self, tr("CouldNotDetectGameVersion"))
             return None
         suggested = (self.settings.game_version_override(game) or "").strip()
-        entered = dialogs.ask_text(
-            self, tr("SetGameVersionTitle"), tr("EnterGameVersionPrompt"), suggested
-        )
+        entered = dialogs.ask_text(self, tr("SetGameVersionTitle"), tr("EnterGameVersionPrompt"), suggested)
         if entered is None:
             return None
         text = entered.strip()

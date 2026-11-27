@@ -172,9 +172,7 @@ def read_game_version(root: Path, executable: Path) -> str | None:
 def detect_launch_store(root: Path, executable: Path) -> LaunchStore:
     if find_steamapps_for_install(root) is not None:
         return LaunchStore.STEAM
-    if (root / ".egstore").is_dir() or any(
-        part for part in executable.parts if "epic" in part.casefold()
-    ):
+    if (root / ".egstore").is_dir() or any(part for part in executable.parts if "epic" in part.casefold()):
         return LaunchStore.EPIC
     # GOG Galaxy often leaves a goggame-*.info next to the root.
     try:
