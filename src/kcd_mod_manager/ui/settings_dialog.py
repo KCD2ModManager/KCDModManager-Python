@@ -330,6 +330,26 @@ class SettingsDialog(QDialog):
             row.description.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.path_labels[game] = row.description
             layout.addWidget(row)
+        self._section(layout, tr("SettingsSectionGameVersion"))
+        self.version_overrides: dict[GameType, QLineEdit] = {}
+        for game in GameType:
+            editor = QLineEdit(self.settings.game_version_override(game))
+            editor.setPlaceholderText(tr("SettingsGameVersionOverridePlaceholder"))
+            editor.setMinimumWidth(160)
+            editor.editingFinished.connect(lambda g=game: self._version_override_changed(g))
+            detected = ""
+            install = self._installs.get(game)
+            if install is not None and install.game_version:
+                detected = tr("SettingsGameVersionDetected", install.game_version)
+            layout.addWidget(
+                SettingRow(
+                    tr(game.display_key),
+                    detected or tr("SettingsGameVersionOverrideDesc"),
+                    editor,
+                    "info",
+                )
+            )
+            self.version_overrides[game] = editor
 
     def _language_page(self, layout: QVBoxLayout) -> None:
         self.language = QComboBox()
@@ -410,6 +430,14 @@ class SettingsDialog(QDialog):
         if value != self.settings.game_launch_args:
             self.settings.game_launch_args = value
             self.hooks.save()
+
+    def _version_override_changed(self, game: GameType) -> None:
+        editor = self.version_overrides[game]
+        value = editor.text().strip()
+        if value != self.settings.game_version_override(game):
+            self.settings.set_game_version_override(game, value)
+            self.hooks.save()
+            self.hooks.view_changed()
 
     def _max_backups_changed(self, value: int) -> None:
         self.settings.backup_max_count = value

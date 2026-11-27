@@ -152,8 +152,13 @@ class ModLibrary:
 
         ordered = apply_order_entries(list(by_id.values()), entries)
         self._map_metadata(ordered, mods_dir)
+        from kcd_mod_manager.infrastructure.game_detection import resolve_game_version
+
+        game_version = resolve_game_version(
+            install.game_version, settings.game_version_override(install.game)
+        )
         for mod in ordered:
-            mod.is_compatible = is_game_version_compatible(mod.game_version, install.game_version)
+            mod.is_compatible = is_game_version_compatible(mod.game_version, game_version)
         return ordered
 
     def _load_local_mod(self, directory: Path, mods_dir: Path, renaming: bool) -> Mod | None:

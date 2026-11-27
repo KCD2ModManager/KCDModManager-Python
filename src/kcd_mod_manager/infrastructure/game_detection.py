@@ -8,8 +8,10 @@ Windows build with ``KingdomCome.exe`` is what we look for.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 import string
 import sys
 from collections.abc import Callable, Iterable
@@ -34,6 +36,10 @@ _BIN_CANDIDATES: dict[GameType, tuple[tuple[str, ...], ...]] = {
     ),
 }
 _BOGUS_VERSIONS = frozenset({"", "0.0.0.0", "1.0.0.0", "0.0.0", "1.0.0"})
+# Warhorse WHDL presets look like ``release_1_5`` / ``kcd2_release_1_5_game_pc`` (branch only).
+_WHDL_RELEASE = re.compile(r"release_(\d+(?:_\d+){1,3})", re.IGNORECASE)
+# Full patch version lives in system.cfg, e.g. ``wh_sys_version = "1.5.6"``.
+_SYS_VERSION = re.compile(r'^\s*wh_sys_version\s*=\s*"([^"]+)"\s*$', re.IGNORECASE | re.MULTILINE)
 
 
 def _find_executable_recursive(directory: Path, depth: int, max_depth: int) -> Path | None:
@@ -81,6 +87,62 @@ def is_usable_game_version(version: str | None) -> bool:
     return bool(text) and text not in _BOGUS_VERSIONS
 
 
+def resolve_game_version(detected: str | None, override: str | None = None) -> str | None:
+    """Prefer a usable auto-detected version; otherwise a manual override from settings."""
+    for candidate in (detected, override):
+        if is_usable_game_version(candidate) and candidate is not None:
+            return candidate.strip()
+    return None
+
+
+def _version_from_whdl_text(text: str) -> str | None:
+    match = _WHDL_RELEASE.search(text)
+    if match is None:
+        return None
+    return match.group(1).replace("_", ".")
+
+
+def read_system_cfg_game_version(root: Path) -> str | None:
+    """Read ``wh_sys_version`` from ``system.cfg`` (full patch, e.g. ``1.5.6``)."""
+    path = find_child_ci(root, "system.cfg")
+    if path is None or not path.is_file():
+        return None
+    try:
+        text = read_text(path)
+    except (OSError, UnicodeDecodeError) as exc:
+        log.debug("Could not read %s: %s", path, exc)
+        return None
+    match = _SYS_VERSION.search(text)
+    return match.group(1).strip() if match else None
+
+
+def read_whdl_game_version(root: Path) -> str | None:
+    """Fallback from ``whdlversions.json`` branch name (often only major.minor, e.g. ``1.5``)."""
+    path = find_child_ci(root, "whdlversions.json")
+    if path is None or not path.is_file():
+        return None
+    try:
+        data = json.loads(read_text(path))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        log.debug("Could not read %s: %s", path, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    preset = data.get("Preset")
+    needles: list[str] = []
+    if isinstance(preset, dict):
+        branch = preset.get("Branch")
+        if isinstance(branch, dict) and isinstance(branch.get("Name"), str):
+            needles.append(branch["Name"])
+        if isinstance(preset.get("Name"), str):
+            needles.append(preset["Name"])
+    for needle in needles:
+        version = _version_from_whdl_text(needle)
+        if is_usable_game_version(version):
+            return version
+    return _version_from_whdl_text(json.dumps(data))
+
+
 def read_game_version(root: Path, executable: Path) -> str | None:
     candidates: list[str] = []
     version_file = find_child_ci(root, "version.txt")
@@ -91,6 +153,12 @@ def read_game_version(root: Path, executable: Path) -> str | None:
                 candidates.append(text)
         except (OSError, UnicodeDecodeError):
             pass
+    sys_ver = read_system_cfg_game_version(root)
+    if sys_ver:
+        candidates.append(sys_ver)
+    whdl = read_whdl_game_version(root)
+    if whdl:
+        candidates.append(whdl)
     for reader in (read_file_version, read_product_version):
         value = reader(executable)
         if value:

@@ -15,6 +15,7 @@ from kcd_mod_manager.infrastructure.game_detection import (
     is_usable_game_version,
     path_volume_missing,
     read_game_version,
+    resolve_game_version,
 )
 
 
@@ -43,11 +44,39 @@ def test_bogus_versions_rejected() -> None:
     assert is_usable_game_version("1.5.6.0")
 
 
+def test_resolve_game_version_prefers_auto_then_override() -> None:
+    assert resolve_game_version("1.5.6.0", "9.9.9") == "1.5.6.0"
+    assert resolve_game_version("1.0.0.0", "1.5.6") == "1.5.6"
+    assert resolve_game_version(None, "1.4.2") == "1.4.2"
+    assert resolve_game_version("1.0.0.0", "") is None
+
+
 def test_read_game_version_prefers_version_txt_over_bogus_pe(tmp_path: Path) -> None:
     (tmp_path / "version.txt").write_text("1.5.6.0\n", encoding="utf-8")
     exe = tmp_path / "KingdomCome.exe"
     exe.write_bytes(b"MZ")
     assert read_game_version(tmp_path, exe) == "1.5.6.0"
+
+
+def test_read_game_version_from_system_cfg_prefers_patch_over_whdl(tmp_path: Path) -> None:
+    (tmp_path / "system.cfg").write_text('wh_sys_version = "1.5.6"\n', encoding="utf-8")
+    (tmp_path / "whdlversions.json").write_text(
+        '{"Preset":{"Name":"kcd2_release_1_5_game_pc","Branch":{"Name":"release_1_5"}}}',
+        encoding="utf-8",
+    )
+    exe = tmp_path / "KingdomCome.exe"
+    exe.write_bytes(b"MZ")
+    assert read_game_version(tmp_path, exe) == "1.5.6"
+
+
+def test_read_game_version_from_whdlversions_when_pe_is_stub(tmp_path: Path) -> None:
+    (tmp_path / "whdlversions.json").write_text(
+        '{"Preset":{"Name":"kcd2_release_1_5_game_pc","Branch":{"Name":"release_1_5"}}}',
+        encoding="utf-8",
+    )
+    exe = tmp_path / "KingdomCome.exe"
+    exe.write_bytes(b"MZ")
+    assert read_game_version(tmp_path, exe) == "1.5"
 
 
 def test_detect_epic_from_egstore(tmp_path: Path) -> None:

@@ -54,6 +54,9 @@ class AppSettings:
     language: str = "en"
     game_path_kcd1: str = ""
     game_path_kcd2: str = ""
+    game_version_override_kcd1: str = ""
+    game_version_override_kcd2: str = ""
+    """Manual game version used when PE/version.txt auto-detect fails (e.g. some Epic/GOG builds)."""
     last_used_profile_kcd1: str = ""
     last_used_profile_kcd2: str = ""
     imported_from_legacy: bool = False
@@ -67,6 +70,18 @@ class AppSettings:
             self.game_path_kcd1 = value
         else:
             self.game_path_kcd2 = value
+
+    def game_version_override(self, game: GameType) -> str:
+        return (
+            self.game_version_override_kcd1 if game is GameType.KCD1 else self.game_version_override_kcd2
+        )
+
+    def set_game_version_override(self, game: GameType, value: str) -> None:
+        text = (value or "").strip()
+        if game is GameType.KCD1:
+            self.game_version_override_kcd1 = text
+        else:
+            self.game_version_override_kcd2 = text
 
     def last_used_profile(self, game: GameType) -> str:
         return self.last_used_profile_kcd1 if game is GameType.KCD1 else self.last_used_profile_kcd2

@@ -405,5 +405,13 @@
   "TrayGameRunning": "Spiel läuft — KCD Mod Manager",
   "TrayShowWindow": "Fenster anzeigen",
   "NotificationModUpdatesTitle": "Mod-Updates",
-  "StatusInstallingProgress": "Installiere {0}/{1}: {2}"
+  "StatusInstallingProgress": "Installiere {0}/{1}: {2}",
+  "CouldNotDetectGameVersion": "Spielversion konnte nicht erkannt werden. Bitte manuell eingeben oder unter Einstellungen → Spiel setzen.",
+  "SetGameVersionTitle": "Spielversion",
+  "EnterGameVersionPrompt": "Die Spielversion konnte aus der Installation nicht gelesen werden (häufig bei Epic/GOG).\nBitte die Version aus dem Spiel oder dem Store eintragen (z. B. 1.5.6):",
+  "GameVersionUndetectedTooltip": "Spielversion nicht erkannt — unter Einstellungen → Spiel manuell setzen, oder „Alle Manifeste aktualisieren“ nutzen (fragt nach).",
+  "SettingsSectionGameVersion": "Manuelle Spielversion",
+  "SettingsGameVersionOverrideDesc": "Wird genutzt, wenn die Auto-Erkennung scheitert. Leer lassen für version.txt / EXE-Metadaten.",
+  "SettingsGameVersionOverridePlaceholder": "z. B. 1.5.6",
+  "SettingsGameVersionDetected": "Auto-erkannt: {0} (manueller Wert nur wenn Erkennung scheitert)"
 }

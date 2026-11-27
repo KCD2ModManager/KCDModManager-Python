@@ -468,9 +468,7 @@ class ManagerSession:
             self.mods.append(mod)
         self.user_data.update_entry(mod.id, lambda e: setattr(e, "last_detected_version", mod.version))
         self._apply_categories([mod])
-        install = self.install
-        if install is not None:
-            mod.is_compatible = is_game_version_compatible(mod.game_version, install.game_version)
+        mod.is_compatible = is_game_version_compatible(mod.game_version, self.resolved_game_version())
         self.save_mod_order()
         return InstallResult(result.status, mod, result.message)
 
@@ -664,24 +662,35 @@ class ManagerSession:
         self._apply_categories(self.mods)
 
     # ------------------------------------------------------------------ manifests
-    def update_manifest_game_version(self, mods: Sequence[Mod]) -> int:
+    def resolved_game_version(self) -> str | None:
+        """Auto-detected install version, or the per-game manual override from settings."""
+        from kcd_mod_manager.infrastructure.game_detection import resolve_game_version
+
+        install = self.install
+        if install is None:
+            return None
+        return resolve_game_version(
+            install.game_version, self.settings.game_version_override(install.game)
+        )
+
+    def update_manifest_game_version(self, mods: Sequence[Mod], version: str | None = None) -> int:
         from kcd_mod_manager.infrastructure.game_detection import is_usable_game_version
 
         install = self.install
-        if install is None or not is_usable_game_version(install.game_version):
+        resolved = version if is_usable_game_version(version) else self.resolved_game_version()
+        if install is None or not is_usable_game_version(resolved):
             raise SessionError("Could not detect game version")
-        version = install.game_version
-        assert version is not None
+        assert resolved is not None
         count = 0
         for mod in mods:
             if mod.path is None or mod.is_workshop_mod:
                 continue
             for manifest in files_with_suffix(mod.path, ".manifest"):
                 if manifest.name.casefold() == "mod.manifest" and mf.update_manifest_fields(
-                    manifest, {"gameVersion": version}
+                    manifest, {"gameVersion": resolved}
                 ):
                     count += 1
-            mod.game_version = version
+            mod.game_version = resolved
             mod.is_compatible = True
         return count
 

@@ -9,6 +9,11 @@ headings, links or formatting, matching the existing changelog on the mod pages.
 
 ## [Unreleased]
 
+## [5.5.1]
+
+- Detect KCD2 game version from system.cfg (wh_sys_version, e.g. 1.5.6); fall back to whdlversions.json / PE metadata
+- Manual game version override in Settings → Game; Update All Manifests prompts when auto-detect fails
+
 ## [5.5.0]
 
 - Sidebar game card: edge-to-edge key art with a compact floating Switch Game chip (no duplicate title)

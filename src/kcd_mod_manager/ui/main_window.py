@@ -890,11 +890,11 @@ class MainWindow(QMainWindow):
             self.category_row.setVisible(bool(self.session.categories))
             self._refresh_order_buttons()
             self._refresh_conflict_marks()
-            version = self.session.install.game_version if self.session.install else None
+            version = self.session.resolved_game_version()
             if is_usable_game_version(version):
                 self.page_subtitle.setToolTip(tr("GameVersionTooltip", version))
             else:
-                self.page_subtitle.setToolTip("")
+                self.page_subtitle.setToolTip(tr("GameVersionUndetectedTooltip"))
         finally:
             self._updating = False
 
@@ -1571,16 +1571,42 @@ class MainWindow(QMainWindow):
     def update_all_manifests(self) -> None:
         if self._mod_actions_blocked():
             return
-        install = self.session.install
-        if install is None or not is_usable_game_version(install.game_version):
-            dialogs.error(self, tr("CouldNotDetectGameVersion"))
+        if self.session.install is None:
+            dialogs.error(self, tr("ErrorGameInstallationNotFound"))
             return
-        if dialogs.confirm(self, tr("UpdateAllManifestsMessage", install.game_version)):
-            self.update_manifests(list(self.session.mods))
+        version = self._ensure_game_version()
+        if version is None:
+            return
+        if dialogs.confirm(self, tr("UpdateAllManifestsMessage", version)):
+            self.update_manifests(list(self.session.mods), version)
 
-    def update_manifests(self, mods: list[Mod]) -> None:
+    def _ensure_game_version(self) -> str | None:
+        """Return a usable game version, prompting + saving a manual override when needed."""
+        version = self.session.resolved_game_version()
+        if is_usable_game_version(version):
+            return version
+        game = self.session.game
+        if game is None:
+            dialogs.error(self, tr("CouldNotDetectGameVersion"))
+            return None
+        suggested = (self.settings.game_version_override(game) or "").strip()
+        entered = dialogs.ask_text(
+            self, tr("SetGameVersionTitle"), tr("EnterGameVersionPrompt"), suggested
+        )
+        if entered is None:
+            return None
+        text = entered.strip()
+        if not is_usable_game_version(text):
+            dialogs.error(self, tr("CouldNotDetectGameVersion"))
+            return None
+        self.settings.set_game_version_override(game, text)
+        self.session.save_settings()
+        self.refresh_view()
+        return text
+
+    def update_manifests(self, mods: list[Mod], version: str | None = None) -> None:
         result: list[int] = []
-        if self._guard(lambda: result.append(self.session.update_manifest_game_version(mods))):
+        if self._guard(lambda: result.append(self.session.update_manifest_game_version(mods, version))):
             self.status(tr("UpdatedManifestsCount", result[0]))
         self.refresh_view()
 
